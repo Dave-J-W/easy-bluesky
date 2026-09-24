@@ -35,6 +35,19 @@ A third motivation is ours alone. We like Phoebus because the display editor is 
 enough that we change screens ourselves, without an agent. Any surface we adopt should
 keep that property. `easy-bluesky` currently does not, and that is the one real gap.
 
+### Upstream has precedence, and the pace is a feature
+
+Nothing below is a complaint about the rate of change. Six commits a day on a two-month-old
+project is a project being actively led, and it is the reason building on it beats starting
+over. The churn table in §2.1 exists to let us *route around* that work, not to slow it
+down: files upstream is actively shaping are files we should not be editing, and knowing
+which ones those are is what lets us add panels without ever landing in someone's way.
+
+Where our judgement differs from upstream's, upstream wins by default. We propose rather
+than patch, we add files rather than edit them, and anything generally useful goes back as
+a PR. `docs/ours/ui-demo/` is what that looks like in practice — a working demonstration
+offered for judgement, with "no" listed as an acceptable answer.
+
 ---
 
 ## 2. What we measured

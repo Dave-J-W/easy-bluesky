@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>TroughPanel</class>
+ <widget class="QWidget" name="TroughPanel">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>420</width>
+    <height>320</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Trough</string>
+  </property>
+  <layout class="QVBoxLayout" name="root">
+   <item>
+    <widget class="QLabel" name="title">
+     <property name="text">
+      <string>Langmuir Trough</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="readouts_box">
+     <property name="title">
+      <string>Readouts</string>
+     </property>
+     <layout class="QGridLayout" name="readouts_grid">
+      <item row="0" column="0">
+       <widget class="QLabel" name="lbl_pressure">
+        <property name="text">
+         <string>Surface pressure</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QLabel" name="val_pressure">
+        <property name="text">
+         <string>--</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="2">
+       <widget class="QLabel" name="unit_pressure">
+        <property name="text">
+         <string>mN/m</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="lbl_area">
+        <property name="text">
+         <string>Area</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLabel" name="val_area">
+        <property name="text">
+         <string>--</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="2">
+       <widget class="QLabel" name="unit_area">
+        <property name="text">
+         <string>cm^2</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="lbl_temperature">
+        <property name="text">
+         <string>Temperature</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QLabel" name="val_temperature">
+        <property name="text">
+         <string>--</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="2">
+       <widget class="QLabel" name="unit_temperature">
+        <property name="text">
+         <string>degC</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="lbl_barrier">
+        <property name="text">
+         <string>Barrier separation</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QLabel" name="val_barrier">
+        <property name="text">
+         <string>--</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="2">
+       <widget class="QLabel" name="unit_barrier">
+        <property name="text">
+         <string>mm</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="control_box">
+     <property name="title">
+      <string>Control</string>
+     </property>
+     <layout class="QHBoxLayout" name="control_row">
+      <item>
+       <widget class="QLabel" name="lbl_setpoint">
+        <property name="text">
+         <string>Target pressure</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QDoubleSpinBox" name="spin_setpoint">
+        <property name="suffix">
+         <string> mN/m</string>
+        </property>
+        <property name="decimals">
+         <number>2</number>
+        </property>
+        <property name="maximum">
+         <double>72.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btn_apply">
+        <property name="text">
+         <string>Apply</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="button_row">
+     <item>
+      <widget class="QPushButton" name="btn_start">
+       <property name="text">
+        <string>Start</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btn_stop">
+       <property name="text">
+        <string>Stop</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="button_spacer">
+       <property name="orientation">
+        <enum>Qt::Orientation::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QLabel" name="status">
+     <property name="text">
+      <string>Disconnected</string>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
