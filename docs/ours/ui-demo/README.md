@@ -26,10 +26,13 @@ way the codebase already does and that is a fine outcome.
 
 ## The proposal, in one sentence
 
-For **new, statically-laid-out panels**, put the layout in a Qt Designer `.ui` file loaded
-at runtime, and keep only behaviour in Python.
+For **new panels whose widget tree is known when you write the file**, put the layout in a
+Qt Designer `.ui` loaded at runtime, and keep only behaviour in Python.
 
 Not proposed: converting anything that already exists.
+
+What "known when you write the file" excludes is narrower than it sounds, and it is worth
+being precise about — see [What "static" means](#what-static-means-and-why-it-is-narrower-than-it-sounds).
 
 ---
 
@@ -43,34 +46,143 @@ Everything in this directory runs. Same panel, built twice:
 | `trough_panel.py` | the `.ui` version — behaviour only |
 | `trough_panel_handcoded.py` | the identical panel, built in Python the current way |
 | `ui_loader.py` | the entire loading mechanism, ~20 lines |
-| `test_ui_demo.py` | 10 tests, including a widget-tree equivalence proof |
+| `test_ui_demo.py` | 16 tests, including widget-tree equivalence and tree-invariance |
 | `measure.py` | reproduces the numbers below and the screenshots |
 
-![the panel](trough_panel.png)
+The panel has live readouts, start/stop, and a **control-mode dropdown** that switches the
+setpoint between pressure control and area control — including its units.
+
+| pressure control | area control |
+|---|---|
+| ![pressure mode](trough_panel.png) | ![area mode](trough_panel_area_mode.png) |
 
 ### Results
 
-Measured with `docs/ours/ui-demo/measure.py`, code lines only — blank lines, comments and
-docstrings excluded, so the explanatory prose in either file does not inflate the count:
+Measured with `measure.py`, code lines only — blank lines, comments and docstrings
+excluded, so the explanatory prose in either file does not inflate the count:
 
 | implementation | Python a human maintains | other |
 |---|---:|---:|
-| `trough_panel.py` + `trough_panel.ui` | **20** | 195 (XML, Designer-managed) |
-| `trough_panel_handcoded.py` | **92** | 0 |
+| `trough_panel.py` + `trough_panel.ui` | **29** | 275 (XML, Designer-managed) |
+| `trough_panel_handcoded.py` | **144** | 0 |
 
-**78 % less Python**, and the two are not merely similar:
+**79 % less Python** — and note the gap *widened* when we added the mode dropdown, from 72
+lines to 115. The advantage scales with panel complexity, because complexity in a panel is
+mostly structure.
+
+The two are not merely similar:
 
 - `test_ui_and_handcoded_build_the_same_widget_tree` compares
   `(objectName, className, parentObjectName)` for every descendant widget. They match.
-- The rendered PNGs are **byte-identical** (`md5 0e5ab210f37a110ab9ba96e8e8d71ad0`).
+- The rendered PNGs are **byte-identical** (`md5 51f72e3e7e0c509feaad2bec413af32b`).
 
 So the smaller version is not doing less. It is the same panel.
 
     $ /path/to/env/python -m pytest docs/ours/ui-demo -q
-    10 passed in 0.12s
+    16 passed in 0.15s
 
 Run with conda-forge `pyqt6` 6.11.0 / Qt 6.11.2, headless (`QT_QPA_PLATFORM=offscreen`).
 No hardware, no EPICS, no queue server.
+
+---
+
+## What "static" means, and why it is narrower than it sounds
+
+This is the part most likely to be misread, so it is worth being exact. "Static" does
+**not** mean "nothing changes." The demo panel changes constantly — readouts update, the
+status line rewrites, the setpoint page swaps, units change — and all of it is static.
+
+### The actual rule
+
+A `.ui` file fixes the **widget tree**: which widget objects exist, what classes they are,
+how they nest, and which layout slot each occupies.
+
+A `.ui` file fixes **nothing else**. Every property — `text`, `value`, `enabled`,
+`visible`, `checked`, `minimum`, `suffix`, `styleSheet`, `toolTip`, the contents of a
+combo box or table — is freely mutable at runtime.
+
+So the question is never "does this panel change?" It is:
+
+> **If I froze the program before any data arrived, could I still name every widget that
+> will ever exist in this panel?**
+
+Yes → static. Put it in a `.ui`.
+
+### Things that look dynamic and are not
+
+This list matters more than the definition, because these are where the judgement usually
+goes wrong — in the *conservative* direction, costing editability for no reason.
+
+| pattern | why it is static |
+|---|---|
+| Readouts updating at 4 Hz | `setText` is a property. No widget is created. |
+| Enabling/disabling controls | property |
+| **Showing/hiding widgets** | `setVisible` is a property. The widget exists either way. This is the most common mistake — building widgets conditionally when hiding them would do. |
+| **`QStackedWidget` page switching** | All pages are named in the `.ui`. Your `live_viewer.py:295` and `hdf5_viewer.py:346` `_plot_stack` (1D vs 2D map) are exactly this. |
+| Combo box items changing | Items are rows in a model, not child widgets. `_update_field_lists()` repopulating a Y-field combo is static. |
+| Table / tree / list contents | `QTreeWidget` is *one* widget; its items are data. The device tree is static in this sense, however many devices appear. |
+| pyqtgraph plots | Designer **widget promotion**: place a `QWidget`, promote it to `pyqtgraph.PlotWidget`, and `uic` instantiates the real class. Custom widgets are not a blocker. |
+| Theme / stylesheet switching | `themes.py` sets properties |
+
+**The mode dropdown in this demo is deliberately an example of this.** It changes the
+visible page and the units of the setpoint, which *feels* structural. It is not, and
+there is a test that proves it:
+
+```python
+def test_mode_switch_does_not_change_the_widget_tree(qtbot, cls):
+    before = widget_tree(panel)
+    panel.set_mode(AREA);      after_area = widget_tree(panel)
+    panel.set_mode(PRESSURE);  after_back = widget_tree(panel)
+    assert before == after_area == after_back
+```
+
+It passes for both implementations. Switching mode is one line:
+
+```python
+self.combo_mode.currentIndexChanged.connect(self.setpoint_stack.setCurrentIndex)
+```
+
+### Things that are genuinely dynamic
+
+The test fails — you cannot name the widgets in advance — when **the number or class of
+widgets depends on data that only exists at runtime**:
+
+- **`ParamForm._make_widget()`** is the clearest case in your codebase. It branches on a
+  parameter's type annotation, fetched from the RE Manager, and returns a different widget
+  class per parameter — or `None` for callables. You cannot know how many spin boxes a
+  plan needs until you have the plan.
+- **The Visual Composer's blocks** — one block widget per step, count set by the user.
+- Anything creating N *distinct widgets* for N runtime items, where model items would not
+  serve.
+
+### The part that actually matters: almost nothing is wholly dynamic
+
+Panels are rarely all one or the other. The usual shape is a **static chassis with one
+dynamic region**. Even the dialog hosting `ParamForm` is a title, a scroll area, an
+OK/Cancel row, and *one* container whose contents are built at runtime.
+
+So the rule is not "this panel is dynamic, therefore no `.ui`." It is:
+
+> **Put the chassis in the `.ui`. Leave a named, empty container widget where the dynamic
+> part goes. Populate that container in code.**
+
+```python
+load_ui("plan_dialog", self)          # title, scroll area, buttons — all static
+for param in plan["parameters"]:      # the one genuinely dynamic region
+    self.param_container.layout().addWidget(self._make_widget(param))
+```
+
+And a further step, if it is ever worth it: when the dynamic region creates *many copies
+of the same row*, that row can itself be a `.ui` loaded N times. `.ui` describes the
+repeated unit; code describes the repetition. We are not proposing that now — it is only
+worth noting that "dynamic" does not put `.ui` out of reach even there.
+
+### Why the asymmetry is reassuring
+
+Getting this wrong in the conservative direction — treating something static as dynamic —
+silently costs editability, and nothing tells you. Getting it wrong the other way is
+harmless: you simply cannot express it in Designer, and you find out in the first minute.
+The failure mode points the safe way.
 
 ---
 
@@ -96,22 +208,19 @@ convention would apply to if it were adopted for new work.
 
 ---
 
-## What it costs, and where it does not apply
+## What it costs
 
 We would rather state these than have you find them.
 
 - **A second file format.** Reviewers read XML as well as Python. The XML is verbose —
-  195 lines for this panel — though Designer writes it and nobody hand-edits it.
+  275 lines for this panel — though Designer writes it and nobody hand-edits it.
 - **Designer has to be installed and version-matched.** Ours is 6.11.2 against conda-forge
   `pyqt6` 6.11.0. A mismatch is exactly what the load test catches.
 - **`pyuic` must never be run.** The moment a `.ui` is compiled to Python, the `.py`
   becomes what people edit and the next regeneration discards those edits. The whole
   benefit depends on this one negative rule, and it is easy to violate by habit.
-- **It does not apply to dynamic layouts, and much of your UI is dynamic.**
-  `ParamForm._make_widget()` builds widgets from a plan's parameter list; the Visual
-  Composer builds blocks at runtime; the Mongo browser's field lists are rebuilt from
-  whatever the run contains. None of that can or should be a `.ui`. This proposal covers
-  **static** panels only, which is a real but bounded subset.
+- **Widget promotion is a small extra concept** for pyqtgraph and custom widgets — easy
+  once, but it is a thing a newcomer has to be told.
 - **It is a convention, and conventions decay** unless something enforces them. The load
   test is that something; without it this is just a suggestion.
 

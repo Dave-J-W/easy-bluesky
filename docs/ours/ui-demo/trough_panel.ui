@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>420</width>
-    <height>320</height>
+    <width>460</width>
+    <height>380</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -119,33 +119,113 @@
      <property name="title">
       <string>Control</string>
      </property>
-     <layout class="QHBoxLayout" name="control_row">
+     <layout class="QVBoxLayout" name="control_col">
       <item>
-       <widget class="QLabel" name="lbl_setpoint">
-        <property name="text">
-         <string>Target pressure</string>
-        </property>
-       </widget>
+       <layout class="QHBoxLayout" name="mode_row">
+        <item>
+         <widget class="QLabel" name="lbl_mode">
+          <property name="text">
+           <string>Mode</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="combo_mode">
+          <property name="toolTip">
+           <string>Which quantity the barrier servo holds constant</string>
+          </property>
+          <item>
+           <property name="text">
+            <string>Pressure control</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Area control</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+        <item>
+         <spacer name="mode_spacer">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
       </item>
       <item>
-       <widget class="QDoubleSpinBox" name="spin_setpoint">
-        <property name="suffix">
-         <string> mN/m</string>
-        </property>
-        <property name="decimals">
-         <number>2</number>
-        </property>
-        <property name="maximum">
-         <double>72.000000000000000</double>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QPushButton" name="btn_apply">
-        <property name="text">
-         <string>Apply</string>
-        </property>
-       </widget>
+       <layout class="QHBoxLayout" name="setpoint_row">
+        <item>
+         <widget class="QStackedWidget" name="setpoint_stack">
+          <property name="currentIndex">
+           <number>0</number>
+          </property>
+          <widget class="QWidget" name="page_pressure">
+           <layout class="QHBoxLayout" name="pressure_row">
+            <item>
+             <widget class="QLabel" name="lbl_target_pressure">
+              <property name="text">
+               <string>Target pressure</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QDoubleSpinBox" name="spin_pressure">
+              <property name="suffix">
+               <string> mN/m</string>
+              </property>
+              <property name="decimals">
+               <number>2</number>
+              </property>
+              <property name="maximum">
+               <double>72.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+          <widget class="QWidget" name="page_area">
+           <layout class="QHBoxLayout" name="area_row">
+            <item>
+             <widget class="QLabel" name="lbl_target_area">
+              <property name="text">
+               <string>Target area</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QDoubleSpinBox" name="spin_area">
+              <property name="suffix">
+               <string> cm^2</string>
+              </property>
+              <property name="decimals">
+               <number>1</number>
+              </property>
+              <property name="maximum">
+               <double>1000.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btn_apply">
+          <property name="text">
+           <string>Apply</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
       </item>
      </layout>
     </widget>

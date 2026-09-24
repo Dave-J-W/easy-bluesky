@@ -58,17 +58,24 @@ print("-" * 58)
 print(f"Python a human writes and maintains: {ui_py} vs {hand_py} "
       f"({hand_py - ui_py} fewer lines, {100 * (hand_py - ui_py) // hand_py} %)")
 
-# Render proof — they are the same widget tree, so one image covers both.
-panel = TroughPanel()
-panel.resize(420, 320)
-panel.update_readings({"pressure": 22.41, "area": 145.2, "temperature": 21.8, "barrier": 63.5})
-panel.set_status("Running — simulation")
-panel.grab().save(str(HERE / "trough_panel.png"))
+READINGS = {"pressure": 22.41, "area": 145.2, "temperature": 21.8, "barrier": 63.5}
 
-hand = TroughPanelHandCoded()
-hand.resize(420, 320)
-hand.update_readings({"pressure": 22.41, "area": 145.2, "temperature": 21.8, "barrier": 63.5})
-hand.set_status("Running — simulation")
-hand.grab().save(str(HERE / "trough_panel_handcoded.png"))
 
-print("\nrendered trough_panel.png and trough_panel_handcoded.png")
+def render(cls, mode: int, out: str) -> None:
+    panel = cls()
+    panel.resize(460, 380)
+    panel.update_readings(READINGS)
+    panel.set_mode(mode)
+    panel.spin_pressure.setValue(30.0)
+    panel.spin_area.setValue(145.0)
+    panel.set_status("Running — simulation")
+    panel.grab().save(str(HERE / out))
+
+
+# Both modes, to show the dropdown. Both implementations, to show they agree.
+render(TroughPanel, 0, "trough_panel.png")
+render(TroughPanel, 1, "trough_panel_area_mode.png")
+render(TroughPanelHandCoded, 0, "trough_panel_handcoded.png")
+
+print("\nrendered trough_panel.png, trough_panel_area_mode.png, "
+      "trough_panel_handcoded.png")
