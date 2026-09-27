@@ -1443,9 +1443,6 @@ class ExperimentsTab(QWidget):
         lbl_log.setObjectName("section_title")
         log_header.addWidget(lbl_log)
         log_header.addStretch()
-        self._next_scan_label = QLabel("Next scan: —")
-        self._next_scan_label.setStyleSheet("color: gray; font-size: 11px;")
-        log_header.addWidget(self._next_scan_label)
         self._btn_report = QPushButton("📄 Report")
         self._btn_report.setToolTip("Generate an HTML experiment report and open in browser")
         self._btn_report.setEnabled(False)
@@ -2018,7 +2015,6 @@ class ExperimentsTab(QWidget):
             next_num += 1
 
         self._next_scan_num = next_num
-        self._next_scan_label.setText(f"Next scan: #{self._next_scan_num}")
 
     def _inject_metadata(self, result_item: dict):
         """Inject experiment/sample metadata into a plan item's md key."""
@@ -2044,7 +2040,6 @@ class ExperimentsTab(QWidget):
             next_num = self._compute_next_scan_num()
             merged["scan_num"] = next_num
             self._next_scan_num = next_num + 1
-            self._next_scan_label.setText(f"Next scan: #{self._next_scan_num}")
         result_item.setdefault("kwargs", {})["md"] = merged
         return result_item
 
@@ -2620,29 +2615,8 @@ class ExperimentsTab(QWidget):
 
     def _on_scan_log_file_changed(self, path: str):
         """fileChanged fires when scans_log.json is modified (not just created)."""
-        # Re-add the path: some writers atomically replace the file, dropping it
-        # from the watcher after the first change notification.
         if Path(path).exists():
             self._fs_watcher.addPath(path)
-        self._update_next_scan_label()
-
-    def _update_next_scan_label(self, _path: str = ""):
-        if not self._active_exp_path:
-            self._next_scan_label.setText("Next scan: —")
-            return
-        log_path = Path(self._active_exp_path) / "scans_log.json"
-        try:
-            entries = json.loads(log_path.read_text(encoding="utf-8"))
-            if isinstance(entries, list):
-                # Watch the file directly so modifications trigger updates.
-                _p = str(log_path)
-                if _p not in self._fs_watcher.files():
-                    self._fs_watcher.addPath(_p)
-                self._next_scan_label.setText(f"Next scan: #{len(entries) + 1}")
-                return
-        except Exception:
-            pass
-        self._next_scan_label.setText("Next scan: #1")
 
     def _on_sample_desc_commit(self):
         self._sample_description = self.sample_desc_edit.text().strip()
@@ -3000,7 +2974,6 @@ class ExperimentsTab(QWidget):
         self._exp_deleted_warning.setVisible(False)
         self._active_exp_path = path
         self._btn_report.setEnabled(True)
-        self._update_next_scan_label()
         self._open_console_log(path)
         self._needs_renumber  = True   # re-number pending queue items from last_completed+1
         self._remote_exp_dir  = info.get("remote_exp_dir", "")
@@ -3118,7 +3091,6 @@ class ExperimentsTab(QWidget):
 
         # Clear all active-experiment state
         self._active_exp_path = ""
-        self._next_scan_label.setText("Next scan: —")
         self._remote_exp_dir  = ""
         self._esaf_info       = {}
         self._logged_uids     = set()
@@ -3372,7 +3344,6 @@ class ExperimentsTab(QWidget):
             })
             self.plan_log_list.addItem(li)
 
-        self._next_scan_label.setText(f"Next scan: #{scan_counter}")
         self._filter_plan_log(self._plan_log_search.text())
 
     def _suppressed_file(self, exp_path: str) -> Path:
@@ -3518,7 +3489,6 @@ class ExperimentsTab(QWidget):
             # in update_compact_queue) will repopulate it from the live queue.
             self._queued_scan_lookup = {}
             self._next_scan_num = self._compute_next_scan_num()
-            self._next_scan_label.setText(f"Next scan: #{self._next_scan_num}")
 
             # Show all entries in the file — no time-window cap.
             entries = all_entries
@@ -3702,7 +3672,6 @@ class ExperimentsTab(QWidget):
             next_num = self._compute_next_scan_num()
             if next_num != self._next_scan_num:
                 self._next_scan_num = next_num
-                self._next_scan_label.setText(f"Next scan: #{next_num}")
         new_uids = [item.get("item_uid", "") for item in items]
         if new_uids == getattr(self, "_compact_queue_uids", None):
             self._update_progress_bars()
