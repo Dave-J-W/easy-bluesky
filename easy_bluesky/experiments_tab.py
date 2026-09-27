@@ -2079,6 +2079,7 @@ class ExperimentsTab(QWidget):
             uid = self.queue_compact.item(i).data(Qt.ItemDataRole.UserRole)
             if uid:
                 self.worker.move_item(uid, i)
+        self._needs_renumber = True  # re-number scan_nums to match new queue order
 
     def _remove_plan(self):
         if not self.worker:
