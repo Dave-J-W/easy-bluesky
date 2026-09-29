@@ -271,13 +271,17 @@ class _EPICSMonitor(QObject):
 
     def _on_change(self, pvname='', value=None, units='', **kw):
         if not self._alive:
+            print(f"[EPICS] _on_change SKIPPED (not alive): {pvname!r}")
             return
         info = self._map.get(pvname)
         if info:
+            print(f"[EPICS] _on_change emitting: {pvname!r} value={value!r}")
             try:
                 self.value_changed.emit(info[0], info[1], value, units or '')
             except RuntimeError:
                 pass
+        else:
+            print(f"[EPICS] _on_change: {pvname!r} NOT in _map")
 
     def _on_connect(self, pvname='', conn=True, **kw):
         if not self._alive:
@@ -961,6 +965,7 @@ class DevicesPlansTab(QWidget):
                     dev_item.setText(3, "")
 
     def _on_pv_changed(self, dev_name: str, sig_name: str, value, units: str):
+        print(f"[TAB] _on_pv_changed: {dev_name!r} {sig_name!r} value={value!r}  sig_in_items={( dev_name, sig_name) in self._signal_items}")
         # Buffer — tree setText() calls are flushed at 10 Hz by _flush_pv_updates
         self._pending_pv_updates[(dev_name, sig_name)] = (value, units)
         # Track numeric readback immediately (used for tweak calculations).
@@ -996,6 +1001,7 @@ class DevicesPlansTab(QWidget):
         pv_updates, self._pending_pv_updates = self._pending_pv_updates, {}
         for (dev_name, sig_name), (value, units) in pv_updates.items():
             sig_item = self._signal_items.get((dev_name, sig_name))
+            print(f"[TAB] flush: {dev_name!r} {sig_name!r} → {_fmt_value(value)!r}  sig_item={sig_item is not None}")
             if sig_item:
                 sig_item.setText(2, _fmt_value(value))
                 sig_item.setText(3, units)
