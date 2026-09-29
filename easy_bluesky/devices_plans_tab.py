@@ -901,9 +901,16 @@ class DevicesPlansTab(QWidget):
         self._apply_plan_filter()
 
     def _fallback_read_stuck_pvs(self):
-        """Called ~4 s after setup; retries every 6 s while stuck PVs remain."""
+        """Called ~4 s after setup; retries every 6 s while stuck PVs remain.
+
+        Uses caget() (native DBR GET) rather than pv.get() so that field PVs
+        whose CA monitor subscription never connects (e.g. MCA .Rn ROI counts
+        on some IOC implementations) are still read — caget does not rely on
+        the subscription being established.
+        """
+        import epics as _epics
         any_stuck = False
-        for pvname, pv in list(self._epics_monitor._pvs.items()):
+        for pvname in list(self._epics_monitor._pvs):
             info = self._epics_monitor._map.get(pvname)
             if info is None:
                 continue
@@ -915,10 +922,7 @@ class DevicesPlansTab(QWidget):
             if "Connecting" not in txt and txt != "○ —":
                 continue
             any_stuck = True
-            if not pv.connected:
-                continue
             try:
-                import epics as _epics
                 val = _epics.caget(pvname, timeout=0.5)
                 if val is not None:
                     self._epics_monitor._on_change(pvname=pvname, value=val, units='')
