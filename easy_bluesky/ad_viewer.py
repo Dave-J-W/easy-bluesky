@@ -254,6 +254,7 @@ class ADViewerWindow(QMainWindow):
         prefix: str,       # e.g. "15PS1:" — must include trailing colon
         pv_map: dict,      # {sig_name: pvname} for this device (informational)
         pva_host: str = "",  # beamline unicast host for PVA routing (profile 'host')
+        pva_pv: str = "",    # full PVA image PV override; if empty, derived from prefix
         parent=None,
     ):
         super().__init__(parent)
@@ -263,7 +264,7 @@ class ADViewerWindow(QMainWindow):
         self._device_name = device_name
         self._prefix      = prefix
         self._cam_pfx     = f"{prefix}cam1:"
-        self._pva_pv      = f"{prefix}Pva1:Image"
+        self._pva_pv      = pva_pv or f"{prefix}Pva1:Image"
 
         self._arr: np.ndarray | None = None
         self._log_scale = False
@@ -1267,12 +1268,51 @@ def _resolve_cam1_pvs(pv_map: dict) -> dict:
     return resolved
 
 
-def extract_ad_prefix(pv_map_for_device: dict) -> str | None:
-    """Given {sig_name: pvname} for one device, return the AD base prefix.
+def extract_ad_pva_pv(pv_map_for_device: dict) -> str | None:
+    """Return the full PVA image PV name from the device's signal PV map.
 
-    Scans PV addresses (not signal names) for 'cam1:' and strips from there.
-    Returns e.g. 'PS1:' or None if no cam1 PVs are found.
+    Strategy 1: look for signals whose *name* contains 'pva' — these belong
+    to the PVA plugin and their PV addresses contain the exact plugin prefix
+    (e.g. '15PS1:Pva1:NDArrayPort' → '15PS1:Pva1:Image').
+
+    Strategy 2: fall back to finding 'cam1:' in any PV address and appending
+    'Pva1:Image' to the base prefix.
     """
+    import re as _re
+    # Strategy 1: pva plugin signals carry the plugin name and base prefix
+    for sig_name, pvname in pv_map_for_device.items():
+        if not pvname or 'pva' not in sig_name.lower():
+            continue
+        m = _re.search(r'(?i)(pva\d*:)', pvname)
+        if m:
+            idx = pvname.lower().index(m.group().lower())
+            base   = pvname[:idx]
+            plugin = pvname[idx: idx + len(m.group())]
+            return f"{base}{plugin}Image"
+    # Strategy 2: cam1-based prefix + Pva1:Image
+    for pvname in pv_map_for_device.values():
+        if not pvname:
+            continue
+        idx = pvname.lower().find('cam1:')
+        if idx >= 0:
+            return pvname[:idx] + "Pva1:Image"
+    return None
+
+
+def extract_ad_prefix(pv_map_for_device: dict) -> str | None:
+    """Return the AD base prefix (e.g. '15PS1:') from the device PV map.
+
+    Uses extract_ad_pva_pv internally so the prefix matches the PVA plugin's
+    actual base rather than a potentially different cam1 prefix.
+    """
+    pva_pv = extract_ad_pva_pv(pv_map_for_device)
+    if pva_pv:
+        # Strip the plugin suffix — everything before the last 'Pvadigits:Image'
+        import re as _re
+        m = _re.search(r'(?i)pva\d*:Image$', pva_pv)
+        if m:
+            return pva_pv[:m.start()]
+    # Last resort: cam1 strip
     for pvname in pv_map_for_device.values():
         if not pvname:
             continue

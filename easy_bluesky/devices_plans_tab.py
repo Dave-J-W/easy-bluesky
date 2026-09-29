@@ -1309,7 +1309,10 @@ class DevicesPlansTab(QWidget):
 
     def _open_ad_viewer(self, dev_name: str, pv_map_dev: dict,
                         force_dialog: bool = False):
-        from .ad_viewer import ADViewerWindow, extract_ad_prefix, _HAS_P4P, _P4P_ERROR, load_ad_settings, save_ad_settings
+        from .ad_viewer import (ADViewerWindow, extract_ad_prefix,
+                                extract_ad_pva_pv,
+                                _HAS_P4P, _P4P_ERROR,
+                                load_ad_settings, save_ad_settings)
 
         if not _HAS_P4P:
             detail = f"\n\nError: {_P4P_ERROR}" if _P4P_ERROR else ""
@@ -1325,7 +1328,8 @@ class DevicesPlansTab(QWidget):
         ad_settings = load_ad_settings()
         saved       = ad_settings.get(dev_name, {})
 
-        # Auto-detect prefix; fall back to saved value
+        # Auto-detect from PV map: full PVA PV first, then base prefix
+        auto_pva_pv = extract_ad_pva_pv(pv_map_dev)
         auto_prefix = extract_ad_prefix(pv_map_dev)
         prefix      = auto_prefix or saved.get('prefix', '')
 
@@ -1371,7 +1375,9 @@ class DevicesPlansTab(QWidget):
                 pass
 
         viewer = ADViewerWindow(dev_name, prefix, pv_map_dev,
-                                pva_host=pva_host, parent=None)
+                                pva_host=pva_host,
+                                pva_pv=auto_pva_pv or "",
+                                parent=None)
         self._ad_viewers[dev_name] = viewer
         viewer.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         viewer.destroyed.connect(lambda _, n=dev_name: self._ad_viewers.pop(n, None))
