@@ -281,18 +281,23 @@ class _EPICSMonitor(QObject):
                 pass
 
     def _do_fetch(self, pvname: str):
-        """Main-thread slot: read current PV value and feed it into the tree.
-        Uses caget (native type) rather than pv.get(form='ctrl') so MCA field
-        PVs that don't support DBR_CTRL still return a value.
+        """Main-thread slot: read current PV value in a daemon thread.
+        Does NOT block the main thread — spawns a one-shot worker.
         """
-        if not self._alive:
+        if not self._alive or pvname not in self._pvs:
             return
-        if pvname not in self._pvs:
-            return
+        import threading
+        threading.Thread(
+            target=self._fetch_worker, args=(pvname,), daemon=True
+        ).start()
+
+    def _fetch_worker(self, pvname: str):
+        """Background thread: caget then deliver via signal (thread-safe)."""
         try:
-            import epics as _epics
-            val = _epics.caget(pvname, timeout=1.0)
-            if val is not None:
+            from epics import ca, caget
+            ca.use_initial_context()
+            val = caget(pvname, timeout=2.0)
+            if val is not None and self._alive:
                 self._on_change(pvname=pvname, value=val, units='')
         except Exception:
             pass
@@ -888,18 +893,11 @@ class DevicesPlansTab(QWidget):
         self._apply_plan_filter()
 
     def _fallback_read_stuck_pvs(self):
-        """Called once ~4 s after setup: force-read any PVs still showing
-        'Connecting…' or '○ —'.  Uses epics.caget() (native type, no form='ctrl')
-        so MCA field PVs (.R0, .R1…) that don't support DBR_CTRL are handled.
-        Runs in the main Qt thread — safe for blocking CA GETs.
+        """Called ~4 s after setup.  Collects stuck PV names in the main thread
+        (instant), then hands them to a daemon thread for non-blocking cagets.
         """
-        try:
-            import epics as _epics
-        except ImportError:
-            return
-
-        stuck = []
-        for pvname, _pv in list(self._epics_monitor._pvs.items()):
+        stuck_pvnames = []
+        for pvname in list(self._epics_monitor._pvs):
             info = self._epics_monitor._map.get(pvname)
             if info is None:
                 continue
@@ -909,19 +907,30 @@ class DevicesPlansTab(QWidget):
                 continue
             txt = sig_item.text(2)
             if "Connecting" in txt or txt == "○ —":
-                stuck.append((pvname, dev_name, sig_name))
+                stuck_pvnames.append(pvname)
 
-        for pvname, dev_name, sig_name in stuck:
+        if stuck_pvnames:
+            import threading
+            threading.Thread(
+                target=self._stuck_pvs_worker,
+                args=(stuck_pvnames,),
+                daemon=True,
+            ).start()
+
+    def _stuck_pvs_worker(self, pvnames: list):
+        """Daemon thread: caget each stuck PV and deliver via signal (non-blocking)."""
+        try:
+            from epics import ca, caget
+            ca.use_initial_context()
+        except Exception:
+            return
+        for pvname in pvnames:
             try:
-                val = _epics.caget(pvname, timeout=2.0)
+                val = caget(pvname, timeout=2.0)
                 if val is not None:
                     self._epics_monitor._on_change(pvname=pvname, value=val, units='')
             except Exception:
                 pass
-
-        # Retry once more after another 5 s for slow IOCs
-        if stuck:
-            QTimer.singleShot(5000, self._fallback_read_stuck_pvs)
 
     # ── Internal ────────────────────────────────────────────────────────────────
 
