@@ -265,18 +265,6 @@ class _EPICSMonitor(QObject):
                 self.connection_changed.emit(info[0], info[1], bool(conn))
             except RuntimeError:
                 pass
-        # Force a value read on connect — auto_monitor's initial callback can be
-        # missed for array / MCA PVs, leaving "Connecting…" displayed indefinitely.
-        if conn:
-            pv = self._pvs.get(pvname)
-            if pv is not None:
-                try:
-                    val   = pv.get(timeout=0.5, use_monitor=False)
-                    units = getattr(pv, 'units', '') or ''
-                    if val is not None and info:
-                        self._on_change(pvname=pvname, value=val, units=units)
-                except Exception:
-                    pass
 
     def _on_desc_change(self, pvname='', value=None, **kw):
         if not self._alive:
