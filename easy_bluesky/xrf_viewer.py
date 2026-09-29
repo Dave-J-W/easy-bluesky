@@ -15,6 +15,10 @@ from PyQt6.QtWidgets import (
 
 _XRF_SETTINGS_PATH = Path.home() / ".easy_bluesky" / "xrf_viewer_settings.json"
 
+# Mn K-line energies (eV) produced by Fe-55 electron-capture decay
+_FE55_KA_EV = 5895.0   # Mn Kα (weighted centroid of Kα1 5898.8 + Kα2 5887.6)
+_FE55_KB_EV = 6490.4   # Mn Kβ1
+
 
 def load_xrf_settings() -> dict:
     try:
@@ -40,6 +44,15 @@ try:
     _HAS_PYMCA = True
 except ImportError:
     _HAS_PYMCA = False
+
+# ── scipy availability (for Gaussian fitting) ─────────────────────────────────
+
+try:
+    from scipy.optimize import curve_fit as _curve_fit
+    from scipy.signal import find_peaks as _find_peaks
+    _HAS_SCIPY = True
+except ImportError:
+    _HAS_SCIPY = False
 
 # ── XRF detector classification ───────────────────────────────────────────────
 
@@ -111,13 +124,18 @@ class XRFViewerWindow(QMainWindow):
         parent=None,
     ):
         super().__init__(parent)
-        self._device_name    = device_name
+        self._device_name      = device_name
         self._spectrum_pv_name = spectrum_pv.strip()
-        self._pv_map         = pv_map or {}
-        self._spectrum_pv    = None   # epics.PV handle
-        self._live           = True
+        self._pv_map           = pv_map or {}
+        self._spectrum_pv      = None   # epics.PV handle
+        self._live             = True
         self._last_counts: np.ndarray | None = None
-        self._connected      = False
+        self._connected        = False
+
+        # Energy calibration: E(ch) = _cal_offset + _cal_gain * ch  (eV)
+        # 0 gain = uncalibrated (display raw channels)
+        self._cal_gain: float   = 0.0
+        self._cal_offset: float = 0.0
 
         self._spectrum_received.connect(self._on_new_spectrum)
 
@@ -160,7 +178,7 @@ class XRFViewerWindow(QMainWindow):
 
     def _build_ctrl(self) -> QWidget:
         panel = QWidget()
-        panel.setFixedWidth(220)
+        panel.setFixedWidth(230)
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(2, 4, 4, 4)
         lay.setSpacing(8)
@@ -223,8 +241,61 @@ class XRFViewerWindow(QMainWindow):
         gdl.addWidget(btn_refresh)
         lay.addWidget(gd)
 
+        # ── Fe-55 energy calibration ──────────────────────────────────
+        lay.addWidget(self._build_calibration_panel())
+
         lay.addStretch()
         return panel
+
+    def _build_calibration_panel(self) -> QGroupBox:
+        gc = QGroupBox("Calibrate — Fe-55")
+        gcl = QVBoxLayout(gc)
+        gcl.setSpacing(5)
+
+        gcl.addWidget(QLabel(f"Mn Kα  ({_FE55_KA_EV:.1f} eV)"))
+        self._spin_ka = QDoubleSpinBox()
+        self._spin_ka.setRange(0, 65535)
+        self._spin_ka.setDecimals(1)
+        self._spin_ka.setSuffix(" ch")
+        self._spin_ka.setValue(0.0)
+        self._spin_ka.wheelEvent = lambda e: e.ignore()
+        self._spin_ka.valueChanged.connect(self._on_cal_channels_changed)
+        gcl.addWidget(self._spin_ka)
+
+        gcl.addWidget(QLabel(f"Mn Kβ  ({_FE55_KB_EV:.1f} eV)"))
+        self._spin_kb = QDoubleSpinBox()
+        self._spin_kb.setRange(0, 65535)
+        self._spin_kb.setDecimals(1)
+        self._spin_kb.setSuffix(" ch")
+        self._spin_kb.setValue(0.0)
+        self._spin_kb.wheelEvent = lambda e: e.ignore()
+        self._spin_kb.valueChanged.connect(self._on_cal_channels_changed)
+        gcl.addWidget(self._spin_kb)
+
+        btn_fit = QPushButton("Auto-fit peaks")
+        btn_fit.setToolTip(
+            "Fits Gaussians to Mn Kα and Kβ peaks in the current spectrum.\n"
+            "Requires scipy."
+        )
+        btn_fit.clicked.connect(self._on_autofit_fe55)
+        gcl.addWidget(btn_fit)
+
+        # Result display
+        self._cal_result_lbl = QLabel("Gain:   —\nOffset: —")
+        self._cal_result_lbl.setStyleSheet("color:#aaa; font-size:11px;")
+        gcl.addWidget(self._cal_result_lbl)
+
+        row = QHBoxLayout()
+        self._btn_apply_cal = QPushButton("Apply")
+        self._btn_apply_cal.setEnabled(False)
+        self._btn_apply_cal.clicked.connect(self._on_apply_calibration)
+        btn_clear_cal = QPushButton("Clear")
+        btn_clear_cal.clicked.connect(self._on_clear_calibration)
+        row.addWidget(self._btn_apply_cal)
+        row.addWidget(btn_clear_cal)
+        gcl.addLayout(row)
+
+        return gc
 
     # ── PV connection ─────────────────────────────────────────────────────────
 
@@ -277,14 +348,21 @@ class XRFViewerWindow(QMainWindow):
         self._last_counts = counts
         n = len(counts)
         total = int(counts.sum())
+        cal_tag = "  cal" if self._cal_gain > 0 else ""
         self._set_status(
-            f"● {self._spectrum_pv_name}  |  {n} ch  |  {total:,} cts", "#2ca02c")
+            f"● {self._spectrum_pv_name}  |  {n} ch  |  {total:,} cts{cal_tag}",
+            "#2ca02c",
+        )
         if not _HAS_PYMCA:
             return
         try:
             channels = np.arange(n, dtype=np.float64)
-            self._mca.setData(channels, counts.astype(np.float64),
-                              legend=self._device_name)
+            if self._cal_gain > 0:
+                # Convert to keV for PyMCA (PyMCA uses keV internally)
+                x = (self._cal_offset + self._cal_gain * channels) / 1000.0
+            else:
+                x = channels
+            self._mca.setData(x, counts.astype(np.float64), legend=self._device_name)
         except Exception as exc:
             self._set_status(f"⚠ PyMCA display error: {exc}", "#e05050")
 
@@ -324,6 +402,130 @@ class XRFViewerWindow(QMainWindow):
     def _on_stop(self):         self._ca_put('.STOP', 1)
     def _on_preset_changed(self): self._ca_put('.PRTM', self._spin_preset.value())
 
+    # ── Fe-55 energy calibration ──────────────────────────────────────────────
+
+    def _fit_gaussian_centroid(self, counts: np.ndarray, center: int,
+                               window: int = 25) -> float:
+        """Fit a Gaussian + background around `center` and return the centroid."""
+        n = len(counts)
+        lo = max(0, center - window)
+        hi = min(n, center + window + 1)
+        x = np.arange(lo, hi, dtype=np.float64)
+        y = counts[lo:hi].astype(np.float64)
+        if y.max() == 0 or not _HAS_SCIPY:
+            return float(center)
+        try:
+            def gauss(x, amp, mu, sigma, bg):
+                return amp * np.exp(-0.5 * ((x - mu) / max(sigma, 0.5)) ** 2) + bg
+
+            p0 = [float(y.max() - y.min()), float(center), 5.0, float(y.min())]
+            bounds = ([0, lo, 0.5, 0], [np.inf, hi, window, np.inf])
+            popt, _ = _curve_fit(gauss, x, y, p0=p0, bounds=bounds, maxfev=3000)
+            return float(popt[1])
+        except Exception:
+            # Fall back to weighted centroid
+            if y.sum() > 0:
+                return float((x * y).sum() / y.sum())
+            return float(center)
+
+    def _on_autofit_fe55(self):
+        if self._last_counts is None:
+            self._set_status("⚠ No spectrum yet — connect and acquire first", "#e05050")
+            return
+        counts = self._last_counts.astype(np.float64)
+        n = len(counts)
+        if n < 10:
+            return
+
+        if not _HAS_SCIPY:
+            self._set_status("⚠ scipy not installed — enter channel positions manually", "#e08050")
+            return
+
+        # Find dominant peak → Mn Kα
+        peaks, props = _find_peaks(counts, prominence=counts.max() * 0.05, width=2)
+        if len(peaks) == 0:
+            self._set_status("⚠ No peaks found in spectrum", "#e05050")
+            return
+
+        ka_peak = int(peaks[np.argmax(counts[peaks])])
+        ka_ch = self._fit_gaussian_centroid(counts, ka_peak)
+
+        # Mn Kβ expected at ka_ch * (Kβ_eV / Kα_eV), ±10 % search window
+        ratio   = _FE55_KB_EV / _FE55_KA_EV          # ≈ 1.1010
+        kb_est  = int(round(ka_ch * ratio))
+        kb_win  = max(15, int(ka_ch * 0.05))
+        lo_kb   = max(0, kb_est - kb_win)
+        hi_kb   = min(n, kb_est + kb_win + 1)
+
+        # Look for a secondary peak in the Kβ window
+        sub = counts[lo_kb:hi_kb]
+        if sub.max() > 0:
+            kb_local = int(np.argmax(sub))
+            kb_peak  = lo_kb + kb_local
+            kb_ch    = self._fit_gaussian_centroid(counts, kb_peak, window=15)
+        else:
+            # No clear Kβ: use ratio estimate (single-point fallback)
+            kb_ch = ka_ch * ratio
+
+        self._spin_ka.blockSignals(True)
+        self._spin_kb.blockSignals(True)
+        self._spin_ka.setValue(round(ka_ch, 1))
+        self._spin_kb.setValue(round(kb_ch, 1))
+        self._spin_ka.blockSignals(False)
+        self._spin_kb.blockSignals(False)
+
+        self._update_calibration_result()
+
+    def _on_cal_channels_changed(self):
+        self._update_calibration_result()
+
+    def _update_calibration_result(self):
+        ka_ch = self._spin_ka.value()
+        kb_ch = self._spin_kb.value()
+        if ka_ch <= 0 or kb_ch <= 0 or abs(kb_ch - ka_ch) < 1:
+            self._cal_result_lbl.setText("Gain:   —\nOffset: —")
+            self._btn_apply_cal.setEnabled(False)
+            return
+
+        gain   = (_FE55_KB_EV - _FE55_KA_EV) / (kb_ch - ka_ch)
+        offset = _FE55_KA_EV - gain * ka_ch
+        self._cal_result_lbl.setText(
+            f"Gain:   {gain:.4f} eV/ch\nOffset: {offset:.2f} eV"
+        )
+        self._btn_apply_cal.setEnabled(True)
+
+    def _on_apply_calibration(self):
+        ka_ch = self._spin_ka.value()
+        kb_ch = self._spin_kb.value()
+        if ka_ch <= 0 or kb_ch <= 0 or abs(kb_ch - ka_ch) < 1:
+            return
+
+        gain   = (_FE55_KB_EV - _FE55_KA_EV) / (kb_ch - ka_ch)
+        offset = _FE55_KA_EV - gain * ka_ch
+
+        self._cal_gain   = gain
+        self._cal_offset = offset
+
+        # Re-display current spectrum with new calibration
+        if self._last_counts is not None:
+            self._on_new_spectrum(self._last_counts)
+
+        self._set_status(
+            f"Calibrated: gain={gain:.4f} eV/ch  offset={offset:.2f} eV", "#2ca02c"
+        )
+        self._save_settings()
+
+    def _on_clear_calibration(self):
+        self._cal_gain   = 0.0
+        self._cal_offset = 0.0
+        self._spin_ka.setValue(0.0)
+        self._spin_kb.setValue(0.0)
+        self._cal_result_lbl.setText("Gain:   —\nOffset: —")
+        self._btn_apply_cal.setEnabled(False)
+        if self._last_counts is not None:
+            self._on_new_spectrum(self._last_counts)
+        self._save_settings()
+
     # ── Persistent settings ───────────────────────────────────────────────────
 
     def _restore_settings(self):
@@ -334,12 +536,27 @@ class XRFViewerWindow(QMainWindow):
             self._pv_edit.setText(pv)
         if 'preset_time' in saved:
             self._spin_preset.setValue(float(saved['preset_time']))
+        ka_ch = float(saved.get('ka_channel', 0.0))
+        kb_ch = float(saved.get('kb_channel', 0.0))
+        if ka_ch > 0:
+            self._spin_ka.setValue(ka_ch)
+        if kb_ch > 0:
+            self._spin_kb.setValue(kb_ch)
+        # Restore calibration if both channels were saved
+        if ka_ch > 0 and kb_ch > 0 and abs(kb_ch - ka_ch) >= 1:
+            self._cal_gain   = float(saved.get('cal_gain', 0.0))
+            self._cal_offset = float(saved.get('cal_offset', 0.0))
+            self._update_calibration_result()
 
     def _save_settings(self):
         settings = load_xrf_settings()
         settings.setdefault(self._device_name, {}).update({
-            'spectrum_pv': self._spectrum_pv_name,
-            'preset_time': self._spin_preset.value(),
+            'spectrum_pv':  self._spectrum_pv_name,
+            'preset_time':  self._spin_preset.value(),
+            'ka_channel':   self._spin_ka.value(),
+            'kb_channel':   self._spin_kb.value(),
+            'cal_gain':     self._cal_gain,
+            'cal_offset':   self._cal_offset,
         })
         save_xrf_settings(settings)
 
