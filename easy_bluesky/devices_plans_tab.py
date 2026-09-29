@@ -10,6 +10,8 @@ from .widgets import NoScrollDoubleSpinBox
 import json
 from pathlib import Path
 
+import threading
+
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QThread, QTimer
 from PyQt6.QtGui import QBrush, QColor, QFont
 
@@ -903,13 +905,13 @@ class DevicesPlansTab(QWidget):
     def _fallback_read_stuck_pvs(self):
         """Called ~4 s after setup; retries every 6 s while stuck PVs remain.
 
-        Uses caget() (native DBR GET) rather than pv.get() so that field PVs
-        whose CA monitor subscription never connects (e.g. MCA .Rn ROI counts
-        on some IOC implementations) are still read — caget does not rely on
-        the subscription being established.
+        Identifies stuck PVs in the main thread, then reads them in a daemon
+        thread so the blocking caget() calls never freeze the UI.  Results are
+        delivered back via _EPICSMonitor._on_change → value_changed signal,
+        which is already safe to emit from background threads (pyqtSignal uses
+        a queued delivery when the receiver lives in a different thread).
         """
-        import epics as _epics
-        any_stuck = False
+        stuck = []
         for pvname in list(self._epics_monitor._pvs):
             info = self._epics_monitor._map.get(pvname)
             if info is None:
@@ -919,18 +921,27 @@ class DevicesPlansTab(QWidget):
             if sig_item is None:
                 continue
             txt = sig_item.text(2)
-            if "Connecting" not in txt and txt != "○ —":
-                continue
-            any_stuck = True
-            try:
-                val = _epics.caget(pvname, timeout=0.5)
-                if val is not None:
-                    self._epics_monitor._on_change(pvname=pvname, value=val, units='')
-            except Exception:
-                pass
+            if "Connecting" in txt or txt == "○ —":
+                stuck.append(pvname)
 
-        if any_stuck:
-            QTimer.singleShot(6000, self._fallback_read_stuck_pvs)
+        if not stuck:
+            return
+
+        monitor = self._epics_monitor
+
+        def _bg():
+            import epics as _ep
+            for pvname in stuck:
+                try:
+                    val = _ep.caget(pvname, timeout=0.5)
+                    if val is not None and monitor._alive:
+                        monitor._on_change(pvname=pvname, value=val, units='')
+                except Exception:
+                    pass
+
+        threading.Thread(target=_bg, daemon=True).start()
+        # Always reschedule; the next call exits early if nothing is stuck.
+        QTimer.singleShot(6000, self._fallback_read_stuck_pvs)
 
     # ── Internal ────────────────────────────────────────────────────────────────
 
