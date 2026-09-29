@@ -300,19 +300,20 @@ class _EPICSMonitor(QObject):
         """Main-thread slot: read current PV value in a daemon thread.
         Does NOT block the main thread — spawns a one-shot worker.
         """
-        if not self._alive or pvname not in self._pvs:
+        if not self._alive:
+            return
+        pv = self._pvs.get(pvname)
+        if pv is None:
             return
         import threading
         threading.Thread(
-            target=self._fetch_worker, args=(pvname,), daemon=True
+            target=self._fetch_worker, args=(pvname, pv), daemon=True
         ).start()
 
-    def _fetch_worker(self, pvname: str):
-        """Background thread: caget then deliver via signal (thread-safe)."""
+    def _fetch_worker(self, pvname: str, pv):
+        """Background thread: pv.get() using the existing connected PV object."""
         try:
-            from epics import ca, caget
-            ca.use_initial_context()
-            val = caget(pvname, timeout=2.0)
+            val = pv.get(timeout=2.0, use_monitor=False)
             if val is not None and self._alive:
                 self._on_change(pvname=pvname, value=val, units='')
         except Exception:
@@ -909,11 +910,12 @@ class DevicesPlansTab(QWidget):
         self._apply_plan_filter()
 
     def _fallback_read_stuck_pvs(self):
-        """Called ~4 s after setup.  Collects stuck PV names in the main thread
-        (instant), then hands them to a daemon thread for non-blocking cagets.
+        """Called ~4 s after setup.  Collects stuck (pvname, pv-object) pairs in
+        the main thread (instant), then hands them to a daemon thread for
+        non-blocking pv.get() calls.  Retries every 6 s while any remain stuck.
         """
-        stuck_pvnames = []
-        for pvname in list(self._epics_monitor._pvs):
+        stuck = []
+        for pvname, pv in list(self._epics_monitor._pvs.items()):
             info = self._epics_monitor._map.get(pvname)
             if info is None:
                 continue
@@ -923,26 +925,31 @@ class DevicesPlansTab(QWidget):
                 continue
             txt = sig_item.text(2)
             if "Connecting" in txt or txt == "○ —":
-                stuck_pvnames.append(pvname)
+                stuck.append((pvname, pv))
 
-        if stuck_pvnames:
+        if stuck:
             import threading
             threading.Thread(
                 target=self._stuck_pvs_worker,
-                args=(stuck_pvnames,),
+                args=(stuck,),
                 daemon=True,
             ).start()
+            QTimer.singleShot(6000, self._fallback_read_stuck_pvs)
 
-    def _stuck_pvs_worker(self, pvnames: list):
-        """Daemon thread: caget each stuck PV and deliver via signal (non-blocking)."""
-        try:
-            from epics import ca, caget
-            ca.use_initial_context()
-        except Exception:
-            return
-        for pvname in pvnames:
+    def _stuck_pvs_worker(self, stuck: list):
+        """Daemon thread: pv.get() each stuck PV using the existing PV object.
+        No CA-context juggling needed — we reuse the already-connected objects.
+        """
+        for pvname, pv in stuck:
             try:
-                val = caget(pvname, timeout=2.0)
+                val = pv.get(timeout=2.0, use_monitor=False)
+                if val is None:
+                    # Last resort: plain caget without form='ctrl'
+                    try:
+                        import epics as _epics
+                        val = _epics.caget(pvname, timeout=2.0)
+                    except Exception:
+                        pass
                 if val is not None:
                     self._epics_monitor._on_change(pvname=pvname, value=val, units='')
             except Exception:
