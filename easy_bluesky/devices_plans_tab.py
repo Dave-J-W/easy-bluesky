@@ -790,6 +790,13 @@ class DevicesPlansTab(QWidget):
             self._status_lbl.setStyleSheet("font-size: 11px; color: #2ca02c;")
             self._status_lbl.setText(f"● Live — monitoring {total} PV(s)")
 
+        # ── Fallback: read any PVs still "Connecting…" after 4 s ────────
+        # auto_monitor's initial callback can be missed for MCA field PVs
+        # (e.g. .R0) when the MCA is idle.  _do_fetch (queued signal) handles
+        # most cases; this timer catches anything that slipped through.
+        if total > 0:
+            QTimer.singleShot(4000, self._fallback_read_stuck_pvs)
+
         # ── Start polling timer for any polled devices ───────────────────
         if self._sim_device_names:
             self._sim_timer = QTimer(self)
@@ -877,6 +884,33 @@ class DevicesPlansTab(QWidget):
                     break
 
         self._apply_plan_filter()
+
+    def _fallback_read_stuck_pvs(self):
+        """Called once ~4 s after setup: force-read any PVs still showing
+        'Connecting…' or '○ —'.  Runs in the main Qt thread so pv.get() is safe.
+        Handles MCA field PVs (.R0, .R1…) whose auto_monitor initial callback
+        is never delivered when the MCA is idle.
+        """
+        for pvname, pv in list(self._epics_monitor._pvs.items()):
+            info = self._epics_monitor._map.get(pvname)
+            if info is None:
+                continue
+            dev_name, sig_name = info
+            sig_item = self._signal_items.get((dev_name, sig_name))
+            if sig_item is None:
+                continue
+            txt = sig_item.text(2)
+            if "Connecting" not in txt and txt != "○ —":
+                continue   # already has a value
+            try:
+                val   = pv.get(timeout=1.0, use_monitor=False)
+                units = getattr(pv, 'units', '') or ''
+                if val is not None:
+                    self._epics_monitor._on_change(
+                        pvname=pvname, value=val, units=units
+                    )
+            except Exception:
+                pass
 
     # ── Internal ────────────────────────────────────────────────────────────────
 
