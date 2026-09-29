@@ -1309,13 +1309,15 @@ class DevicesPlansTab(QWidget):
 
     def _open_ad_viewer(self, dev_name: str, pv_map_dev: dict,
                         force_dialog: bool = False):
-        from .ad_viewer import ADViewerWindow, extract_ad_prefix, _HAS_P4P, load_ad_settings, save_ad_settings
+        from .ad_viewer import ADViewerWindow, extract_ad_prefix, _HAS_P4P, _P4P_ERROR, load_ad_settings, save_ad_settings
 
         if not _HAS_P4P:
+            detail = f"\n\nError: {_P4P_ERROR}" if _P4P_ERROR else ""
             QMessageBox.warning(
-                self, "p4p not installed",
+                self, "p4p not available",
                 "The p4p package is required for PVA image streaming.\n\n"
-                "Install it with:\n    pip install p4p",
+                "Install it with:\n    pip install p4p"
+                + detail,
             )
             return
 

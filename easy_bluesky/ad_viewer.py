@@ -45,8 +45,10 @@ except ImportError:
 try:
     from p4p.client.thread import Context as _PVAContext  # noqa: F401
     _HAS_P4P = True
-except ImportError:
+    _P4P_ERROR = ""
+except Exception as _e:
     _HAS_P4P = False
+    _P4P_ERROR = str(_e)
 
 _COLORMAPS    = ["viridis", "inferno", "plasma", "gray", "CET-R4"]
 _MAX_FPS      = 20
