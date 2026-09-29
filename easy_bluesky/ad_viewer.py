@@ -46,13 +46,21 @@ try:
     import sys as _sys
     if _sys.platform == "win32":
         import os as _os
-        # Python 3.8+ no longer searches PATH for DLLs.  Explicitly add the
-        # conda environment's Library\bin so p4p can find its EPICS DLLs.
-        _conda_prefix = _os.environ.get("CONDA_PREFIX", "")
-        if _conda_prefix:
-            _dll_dir = _os.path.join(_conda_prefix, "Library", "bin")
+        # Python 3.8+ no longer searches PATH for DLLs.  Register all
+        # candidate directories so p4p can find its EPICS DLLs.
+        # Use sys.prefix (always set) rather than CONDA_PREFIX (only set
+        # when the env was explicitly activated via `conda activate`).
+        for _dll_dir in [
+            _os.path.join(_sys.prefix, "Library", "bin"),
+            _os.path.join(_sys.prefix, "Library", "mingw-w64", "bin"),
+            _os.path.join(_sys.prefix, "DLLs"),
+            _os.path.join(_sys.prefix, "bin"),
+        ]:
             if _os.path.isdir(_dll_dir):
-                _os.add_dll_directory(_dll_dir)
+                try:
+                    _os.add_dll_directory(_dll_dir)
+                except Exception:
+                    pass
     from p4p.client.thread import Context as _PVAContext  # noqa: F401
     _HAS_P4P = True
     _P4P_ERROR = ""
