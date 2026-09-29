@@ -191,6 +191,8 @@ class _EPICSMonitor(QObject):
     value_changed      = pyqtSignal(str, str, object, str)  # dev, sig, value, units
     connection_changed = pyqtSignal(str, str, bool)          # dev, sig, connected
     desc_changed       = pyqtSignal(str, str, str)           # dev, sig, desc
+    # Internal: emitted from CA thread, received in main thread to do a safe get()
+    _fetch_on_connect  = pyqtSignal(str)                     # pvname
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -199,6 +201,11 @@ class _EPICSMonitor(QObject):
         self._desc_pvs: dict = {}   # record.DESC → epics.PV  (one per record base)
         self._desc_map: dict = {}   # record.DESC → [(dev_name, sig_name), ...]
         self._alive: bool    = True  # guards callbacks after Qt C++ deletion
+        # Queued connection ensures the slot always runs in the main Qt thread,
+        # even when the signal is emitted from the CA background thread.
+        self._fetch_on_connect.connect(
+            self._do_fetch, Qt.ConnectionType.QueuedConnection
+        )
 
     def setup(self, pv_map: dict):
         """Open CA monitors for every PV in pv_map = {dev: {sig: pvname}}."""
@@ -265,6 +272,28 @@ class _EPICSMonitor(QObject):
                 self.connection_changed.emit(info[0], info[1], bool(conn))
             except RuntimeError:
                 pass
+        if conn:
+            # Request a value read from the main Qt thread.  Calling pv.get()
+            # here (CA thread) would deadlock; the queued signal crosses safely.
+            try:
+                self._fetch_on_connect.emit(pvname)
+            except RuntimeError:
+                pass
+
+    def _do_fetch(self, pvname: str):
+        """Main-thread slot: read current PV value and feed it into the tree."""
+        if not self._alive:
+            return
+        pv = self._pvs.get(pvname)
+        if pv is None:
+            return
+        try:
+            val   = pv.get(timeout=1.0, use_monitor=False)
+            units = getattr(pv, 'units', '') or ''
+            if val is not None:
+                self._on_change(pvname=pvname, value=val, units=units)
+        except Exception:
+            pass
 
     def _on_desc_change(self, pvname='', value=None, **kw):
         if not self._alive:
