@@ -271,22 +271,17 @@ class _EPICSMonitor(QObject):
 
     def _on_change(self, pvname='', value=None, units='', **kw):
         if not self._alive:
-            print(f"[EPICS] _on_change SKIPPED (not alive): {pvname!r}")
             return
         info = self._map.get(pvname)
         if info:
-            print(f"[EPICS] _on_change emitting: {pvname!r} value={value!r}")
             try:
                 self.value_changed.emit(info[0], info[1], value, units or '')
             except RuntimeError:
                 pass
-        else:
-            print(f"[EPICS] _on_change: {pvname!r} NOT in _map")
 
     def _on_connect(self, pvname='', conn=True, **kw):
         if not self._alive:
             return
-        print(f"[EPICS] _on_connect: {pvname!r}  conn={conn}")
         info = self._map.get(pvname)
         if info:
             try:
@@ -303,16 +298,14 @@ class _EPICSMonitor(QObject):
         if not self._alive:
             return
         pv = self._pvs.get(pvname)
-        print(f"[EPICS] _do_fetch: {pvname!r}  pv={pv}  connected={getattr(pv,'connected',None)}")
         if pv is None or not pv.connected:
             return
         try:
             val = pv.get(timeout=0.5, use_monitor=False)
-            print(f"[EPICS] _do_fetch got: {pvname!r}  val={val!r}")
             if val is not None:
                 self._on_change(pvname=pvname, value=val, units='')
-        except Exception as e:
-            print(f"[EPICS] _do_fetch exception: {pvname!r}  {e}")
+        except Exception:
+            pass
 
     def _on_desc_change(self, pvname='', value=None, **kw):
         if not self._alive:
@@ -693,10 +686,6 @@ class DevicesPlansTab(QWidget):
         Both groups can coexist (mixed beamline).
         """
         self._pv_map_cache = {dev: dict(sigs) for dev, sigs in pv_map.items()}
-        # Debug: dump pv_map entries that contain mca
-        for _k, _v in pv_map.items():
-            if 'mca' in _k.lower() or any('mca' in str(vv).lower() for vv in _v.values()):
-                print(f"[SETUP] pv_map entry: {_k!r} → {_v}")
         try:
             import epics  # noqa: F401
         except ImportError:
@@ -727,9 +716,6 @@ class DevicesPlansTab(QWidget):
         # ── Signal sub-rows + tweak widgets for EPICS devices ────────────
         for dev_name, sigs in epics_pv_map.items():
             item = self._device_items.get(dev_name)
-            if 'mca' in dev_name.lower():
-                print(f"[SETUP] epics_pv_map dev={dev_name!r} sigs={sigs} item_found={item is not None}")
-                print(f"[SETUP] _device_items keys with mca: {[k for k in self._device_items if 'mca' in k.lower()]}")
             if item is None:
                 continue
 
@@ -913,7 +899,6 @@ class DevicesPlansTab(QWidget):
 
     def _fallback_read_stuck_pvs(self):
         """Called ~4 s after setup; retries every 6 s while stuck PVs remain."""
-        print(f"[EPICS] _fallback_read_stuck_pvs: {len(self._epics_monitor._pvs)} PVs total")
         any_stuck = False
         for pvname, pv in list(self._epics_monitor._pvs.items()):
             info = self._epics_monitor._map.get(pvname)
@@ -927,16 +912,14 @@ class DevicesPlansTab(QWidget):
             if "Connecting" not in txt and txt != "○ —":
                 continue
             any_stuck = True
-            print(f"[EPICS]   stuck: {pvname!r}  connected={pv.connected}  txt={txt!r}")
             if not pv.connected:
                 continue
             try:
                 val = pv.get(timeout=0.5, use_monitor=False)
-                print(f"[EPICS]   got: {pvname!r}  val={val!r}")
                 if val is not None:
                     self._epics_monitor._on_change(pvname=pvname, value=val, units='')
-            except Exception as e:
-                print(f"[EPICS]   exception: {pvname!r}  {e}")
+            except Exception:
+                pass
 
         if any_stuck:
             QTimer.singleShot(6000, self._fallback_read_stuck_pvs)
@@ -972,7 +955,6 @@ class DevicesPlansTab(QWidget):
                     dev_item.setText(3, "")
 
     def _on_pv_changed(self, dev_name: str, sig_name: str, value, units: str):
-        print(f"[TAB] _on_pv_changed: {dev_name!r} {sig_name!r} value={value!r}  sig_in_items={( dev_name, sig_name) in self._signal_items}")
         # Buffer — tree setText() calls are flushed at 10 Hz by _flush_pv_updates
         self._pending_pv_updates[(dev_name, sig_name)] = (value, units)
         # Track numeric readback immediately (used for tweak calculations).
@@ -1008,7 +990,6 @@ class DevicesPlansTab(QWidget):
         pv_updates, self._pending_pv_updates = self._pending_pv_updates, {}
         for (dev_name, sig_name), (value, units) in pv_updates.items():
             sig_item = self._signal_items.get((dev_name, sig_name))
-            print(f"[TAB] flush: {dev_name!r} {sig_name!r} → {_fmt_value(value)!r}  sig_item={sig_item is not None}")
             if sig_item:
                 sig_item.setText(2, _fmt_value(value))
                 sig_item.setText(3, units)
