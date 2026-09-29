@@ -295,13 +295,16 @@ class _EPICSMonitor(QObject):
                 pass
 
     def _do_fetch(self, pvname: str):
+        # Use caget (native DBR) rather than pv.get() so that field PVs that
+        # don't support DBR_CTRL (e.g. MCA .Rn ROI counts) still return a value.
         if not self._alive:
             return
         pv = self._pvs.get(pvname)
         if pv is None or not pv.connected:
             return
         try:
-            val = pv.get(timeout=0.5, use_monitor=False)
+            import epics as _epics
+            val = _epics.caget(pvname, timeout=0.5)
             if val is not None:
                 self._on_change(pvname=pvname, value=val, units='')
         except Exception:
@@ -915,7 +918,8 @@ class DevicesPlansTab(QWidget):
             if not pv.connected:
                 continue
             try:
-                val = pv.get(timeout=0.5, use_monitor=False)
+                import epics as _epics
+                val = _epics.caget(pvname, timeout=0.5)
                 if val is not None:
                     self._epics_monitor._on_change(pvname=pvname, value=val, units='')
             except Exception:
