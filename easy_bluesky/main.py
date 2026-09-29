@@ -2,14 +2,16 @@
 
 import sys
 
-# On Windows (Python 3.8+) PATH is not searched for DLLs.  Register the
-# conda environment's DLL directories before any package import so that
-# native extensions (p4p, pyepics) all load DLLs from the same location
-# and avoid version-mismatch "procedure not found" errors.
+# On Windows (Python 3.8+) PATH is not searched for DLLs.  Pre-load EPICS
+# DLLs from their exact conda paths using ctypes before any other import.
+# os.add_dll_directory() alone is not enough when a conflicting system-EPICS
+# DLL is already in memory; ctypes.WinDLL with a full path locks in the
+# correct version so p4p and pyepics both use the conda-forge build.
 if sys.platform == "win32":
-    import os as _os
+    import os as _os, ctypes as _ctypes
+    _lib_bin = _os.path.join(sys.prefix, "Library", "bin")
     for _dll_dir in [
-        _os.path.join(sys.prefix, "Library", "bin"),
+        _lib_bin,
         _os.path.join(sys.prefix, "Library", "mingw-w64", "bin"),
         _os.path.join(sys.prefix, "DLLs"),
         _os.path.join(sys.prefix, "bin"),
@@ -19,7 +21,14 @@ if sys.platform == "win32":
                 _os.add_dll_directory(_dll_dir)
             except Exception:
                 pass
-    del _os, _dll_dir
+    for _dll in ["Com.dll", "pvData.dll", "pvAccess.dll", "pvAccessCA.dll", "pvaClient.dll"]:
+        _dll_path = _os.path.join(_lib_bin, _dll)
+        if _os.path.isfile(_dll_path):
+            try:
+                _ctypes.WinDLL(_dll_path)
+            except Exception:
+                pass
+    del _os, _ctypes, _lib_bin
 
 import time
 import threading
