@@ -281,17 +281,19 @@ class _EPICSMonitor(QObject):
                 pass
 
     def _do_fetch(self, pvname: str):
-        """Main-thread slot: read current PV value and feed it into the tree."""
+        """Main-thread slot: read current PV value and feed it into the tree.
+        Uses caget (native type) rather than pv.get(form='ctrl') so MCA field
+        PVs that don't support DBR_CTRL still return a value.
+        """
         if not self._alive:
             return
-        pv = self._pvs.get(pvname)
-        if pv is None:
+        if pvname not in self._pvs:
             return
         try:
-            val   = pv.get(timeout=1.0, use_monitor=False)
-            units = getattr(pv, 'units', '') or ''
+            import epics as _epics
+            val = _epics.caget(pvname, timeout=1.0)
             if val is not None:
-                self._on_change(pvname=pvname, value=val, units=units)
+                self._on_change(pvname=pvname, value=val, units='')
         except Exception:
             pass
 
@@ -887,11 +889,17 @@ class DevicesPlansTab(QWidget):
 
     def _fallback_read_stuck_pvs(self):
         """Called once ~4 s after setup: force-read any PVs still showing
-        'Connecting…' or '○ —'.  Runs in the main Qt thread so pv.get() is safe.
-        Handles MCA field PVs (.R0, .R1…) whose auto_monitor initial callback
-        is never delivered when the MCA is idle.
+        'Connecting…' or '○ —'.  Uses epics.caget() (native type, no form='ctrl')
+        so MCA field PVs (.R0, .R1…) that don't support DBR_CTRL are handled.
+        Runs in the main Qt thread — safe for blocking CA GETs.
         """
-        for pvname, pv in list(self._epics_monitor._pvs.items()):
+        try:
+            import epics as _epics
+        except ImportError:
+            return
+
+        stuck = []
+        for pvname, _pv in list(self._epics_monitor._pvs.items()):
             info = self._epics_monitor._map.get(pvname)
             if info is None:
                 continue
@@ -900,17 +908,20 @@ class DevicesPlansTab(QWidget):
             if sig_item is None:
                 continue
             txt = sig_item.text(2)
-            if "Connecting" not in txt and txt != "○ —":
-                continue   # already has a value
+            if "Connecting" in txt or txt == "○ —":
+                stuck.append((pvname, dev_name, sig_name))
+
+        for pvname, dev_name, sig_name in stuck:
             try:
-                val   = pv.get(timeout=1.0, use_monitor=False)
-                units = getattr(pv, 'units', '') or ''
+                val = _epics.caget(pvname, timeout=2.0)
                 if val is not None:
-                    self._epics_monitor._on_change(
-                        pvname=pvname, value=val, units=units
-                    )
+                    self._epics_monitor._on_change(pvname=pvname, value=val, units='')
             except Exception:
                 pass
+
+        # Retry once more after another 5 s for slow IOCs
+        if stuck:
+            QTimer.singleShot(5000, self._fallback_read_stuck_pvs)
 
     # ── Internal ────────────────────────────────────────────────────────────────
 
