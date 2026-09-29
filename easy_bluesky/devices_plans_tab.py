@@ -265,6 +265,18 @@ class _EPICSMonitor(QObject):
                 self.connection_changed.emit(info[0], info[1], bool(conn))
             except RuntimeError:
                 pass
+        # Force a value read on connect — auto_monitor's initial callback can be
+        # missed for array / MCA PVs, leaving "Connecting…" displayed indefinitely.
+        if conn:
+            pv = self._pvs.get(pvname)
+            if pv is not None:
+                try:
+                    val   = pv.get(timeout=0.5, use_monitor=False)
+                    units = getattr(pv, 'units', '') or ''
+                    if val is not None and info:
+                        self._on_change(pvname=pvname, value=val, units=units)
+                except Exception:
+                    pass
 
     def _on_desc_change(self, pvname='', value=None, **kw):
         if not self._alive:
@@ -857,17 +869,27 @@ class DevicesPlansTab(QWidget):
 
         sig_item = self._signal_items.get((dev_name, sig_name))
         if sig_item:
-            if not connected:
+            if connected:
+                # Clear the placeholder; actual value arrives via _on_pv_changed
+                if sig_item.text(2) == "○ Connecting…":
+                    sig_item.setText(2, "○ —")
+                    sig_item.setForeground(2, grey)
+            else:
                 sig_item.setText(2, "○ Disconnected")
                 sig_item.setForeground(2, red)
                 sig_item.setText(3, "")
 
         if self._primary_signal.get(dev_name) == sig_name:
             dev_item = self._device_items.get(dev_name)
-            if dev_item and not connected:
-                dev_item.setText(2, "○ Disconnected")
-                dev_item.setForeground(2, red)
-                dev_item.setText(3, "")
+            if dev_item:
+                if connected:
+                    if dev_item.text(2) == "○ Connecting…":
+                        dev_item.setText(2, "○ —")
+                        dev_item.setForeground(2, grey)
+                else:
+                    dev_item.setText(2, "○ Disconnected")
+                    dev_item.setForeground(2, red)
+                    dev_item.setText(3, "")
 
     def _on_pv_changed(self, dev_name: str, sig_name: str, value, units: str):
         # Buffer — tree setText() calls are flushed at 10 Hz by _flush_pv_updates
