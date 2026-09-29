@@ -241,7 +241,7 @@ class _EPICSMonitor(QObject):
                 pv = epics.PV(
                     pvname,
                     auto_monitor=True,
-                    form='ctrl',             # DBR_CTRL callbacks include units
+                    form='time',             # DBR_TIME: universally supported
                     callback=self._on_change,
                     connection_callback=self._on_connect,
                 )
@@ -272,7 +272,7 @@ class _EPICSMonitor(QObject):
         self._desc_map.clear()
 
     def _on_change(self, pvname='', value=None, units='', **kw):
-        if not self._alive:
+        if not self._alive or value is None:
             return
         info = self._map.get(pvname)
         if info:
@@ -297,8 +297,9 @@ class _EPICSMonitor(QObject):
                 pass
 
     def _do_fetch(self, pvname: str):
-        # Use caget (native DBR) rather than pv.get() so that field PVs that
-        # don't support DBR_CTRL (e.g. MCA .Rn ROI counts) still return a value.
+        # On connection, fetch the current value via caget (native DBR) and
+        # attempt a separate DBR_CTRL get to retrieve engineering units.
+        # DBR_CTRL is tried but ignored on failure (e.g. MCA .Rn fields).
         if not self._alive:
             return
         pv = self._pvs.get(pvname)
@@ -308,7 +309,14 @@ class _EPICSMonitor(QObject):
             import epics as _epics
             val = _epics.caget(pvname, timeout=0.5)
             if val is not None:
-                self._on_change(pvname=pvname, value=val, units='')
+                units = ''
+                try:
+                    ctrl = pv.get(form='ctrl', use_monitor=False, timeout=0.3)
+                    if ctrl is not None:
+                        units = getattr(pv, 'units', '') or ''
+                except Exception:
+                    pass
+                self._on_change(pvname=pvname, value=val, units=units)
         except Exception:
             pass
 
