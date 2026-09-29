@@ -693,6 +693,10 @@ class DevicesPlansTab(QWidget):
         Both groups can coexist (mixed beamline).
         """
         self._pv_map_cache = {dev: dict(sigs) for dev, sigs in pv_map.items()}
+        # Debug: dump pv_map entries that contain mca
+        for _k, _v in pv_map.items():
+            if 'mca' in _k.lower() or any('mca' in str(vv).lower() for vv in _v.values()):
+                print(f"[SETUP] pv_map entry: {_k!r} → {_v}")
         try:
             import epics  # noqa: F401
         except ImportError:
@@ -723,6 +727,9 @@ class DevicesPlansTab(QWidget):
         # ── Signal sub-rows + tweak widgets for EPICS devices ────────────
         for dev_name, sigs in epics_pv_map.items():
             item = self._device_items.get(dev_name)
+            if 'mca' in dev_name.lower():
+                print(f"[SETUP] epics_pv_map dev={dev_name!r} sigs={sigs} item_found={item is not None}")
+                print(f"[SETUP] _device_items keys with mca: {[k for k in self._device_items if 'mca' in k.lower()]}")
             if item is None:
                 continue
 
