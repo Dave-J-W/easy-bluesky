@@ -1,6 +1,26 @@
 """main.py — MainWindow and application entry point."""
 
 import sys
+
+# On Windows (Python 3.8+) PATH is not searched for DLLs.  Register the
+# conda environment's DLL directories before any package import so that
+# native extensions (p4p, pyepics) all load DLLs from the same location
+# and avoid version-mismatch "procedure not found" errors.
+if sys.platform == "win32":
+    import os as _os
+    for _dll_dir in [
+        _os.path.join(sys.prefix, "Library", "bin"),
+        _os.path.join(sys.prefix, "Library", "mingw-w64", "bin"),
+        _os.path.join(sys.prefix, "DLLs"),
+        _os.path.join(sys.prefix, "bin"),
+    ]:
+        if _os.path.isdir(_dll_dir):
+            try:
+                _os.add_dll_directory(_dll_dir)
+            except Exception:
+                pass
+    del _os, _dll_dir
+
 import time
 import threading
 from datetime import datetime
