@@ -43,6 +43,16 @@ except ImportError:
     _HAS_PG = False
 
 try:
+    import sys as _sys
+    if _sys.platform == "win32":
+        import os as _os
+        # Python 3.8+ no longer searches PATH for DLLs.  Explicitly add the
+        # conda environment's Library\bin so p4p can find its EPICS DLLs.
+        _conda_prefix = _os.environ.get("CONDA_PREFIX", "")
+        if _conda_prefix:
+            _dll_dir = _os.path.join(_conda_prefix, "Library", "bin")
+            if _os.path.isdir(_dll_dir):
+                _os.add_dll_directory(_dll_dir)
     from p4p.client.thread import Context as _PVAContext  # noqa: F401
     _HAS_P4P = True
     _P4P_ERROR = ""
