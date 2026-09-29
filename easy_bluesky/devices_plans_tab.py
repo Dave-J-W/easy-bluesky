@@ -282,6 +282,7 @@ class _EPICSMonitor(QObject):
     def _on_connect(self, pvname='', conn=True, **kw):
         if not self._alive:
             return
+        print(f"[EPICS] _on_connect: {pvname!r}  conn={conn}")
         info = self._map.get(pvname)
         if info:
             try:
@@ -289,29 +290,25 @@ class _EPICSMonitor(QObject):
             except RuntimeError:
                 pass
         if conn:
-            # Request a value read from the main Qt thread.  Calling pv.get()
-            # here (CA thread) would deadlock; the queued signal crosses safely.
             try:
                 self._fetch_on_connect.emit(pvname)
             except RuntimeError:
                 pass
 
     def _do_fetch(self, pvname: str):
-        """Main-thread slot triggered on CA connect.  For connected PVs pv.get()
-        returns in milliseconds, so calling it here is safe and non-blocking in
-        practice.  Skips disconnected PVs (handled by _fallback_read_stuck_pvs).
-        """
         if not self._alive:
             return
         pv = self._pvs.get(pvname)
+        print(f"[EPICS] _do_fetch: {pvname!r}  pv={pv}  connected={getattr(pv,'connected',None)}")
         if pv is None or not pv.connected:
             return
         try:
             val = pv.get(timeout=0.5, use_monitor=False)
+            print(f"[EPICS] _do_fetch got: {pvname!r}  val={val!r}")
             if val is not None:
                 self._on_change(pvname=pvname, value=val, units='')
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[EPICS] _do_fetch exception: {pvname!r}  {e}")
 
     def _on_desc_change(self, pvname='', value=None, **kw):
         if not self._alive:
@@ -904,12 +901,8 @@ class DevicesPlansTab(QWidget):
         self._apply_plan_filter()
 
     def _fallback_read_stuck_pvs(self):
-        """Called ~4 s after setup; retries every 6 s while stuck PVs remain.
-
-        Reads are done in the main thread — pv.get() on a connected PV returns
-        in milliseconds, so there is no noticeable freeze.  Disconnected PVs are
-        skipped (pv.connected check) to avoid blocking on the full timeout.
-        """
+        """Called ~4 s after setup; retries every 6 s while stuck PVs remain."""
+        print(f"[EPICS] _fallback_read_stuck_pvs: {len(self._epics_monitor._pvs)} PVs total")
         any_stuck = False
         for pvname, pv in list(self._epics_monitor._pvs.items()):
             info = self._epics_monitor._map.get(pvname)
@@ -923,14 +916,16 @@ class DevicesPlansTab(QWidget):
             if "Connecting" not in txt and txt != "○ —":
                 continue
             any_stuck = True
+            print(f"[EPICS]   stuck: {pvname!r}  connected={pv.connected}  txt={txt!r}")
             if not pv.connected:
-                continue   # genuinely offline — skip to avoid blocking timeout
+                continue
             try:
                 val = pv.get(timeout=0.5, use_monitor=False)
+                print(f"[EPICS]   got: {pvname!r}  val={val!r}")
                 if val is not None:
                     self._epics_monitor._on_change(pvname=pvname, value=val, units='')
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[EPICS]   exception: {pvname!r}  {e}")
 
         if any_stuck:
             QTimer.singleShot(6000, self._fallback_read_stuck_pvs)
