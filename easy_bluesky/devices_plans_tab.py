@@ -151,8 +151,24 @@ def _device_color(module: str) -> tuple:
 def _fmt_value(val) -> str:
     if val is None:
         return "—"
+    # Unwrap numpy types — numpy ≥ 2.0 scalars are no longer Python float/int
+    try:
+        import numpy as _np
+        if isinstance(val, _np.ndarray):
+            if val.size == 1:
+                val = val.flat[0].item()   # 1-element array → Python scalar
+            else:
+                return f"[{val.size} items]"
+        elif isinstance(val, (_np.floating, _np.integer, _np.bool_)):
+            val = val.item()
+    except ImportError:
+        pass
     if isinstance(val, float):
         return f"{val:.6g}"
+    if isinstance(val, bool):
+        return str(val)
+    if isinstance(val, int):
+        return str(val)
     if isinstance(val, list):
         return f"[{len(val)} items]"
     return str(val)
