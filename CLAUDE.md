@@ -39,6 +39,25 @@ easy_bluesky/ (PyQt6 GUI)   SSH    bluesky-queueserver v0.0.25
 | `easy_bluesky/sim_generator.py` | Parses real devices file → generates `devices_sim.py` |
 | `easy_bluesky/scripts/re_startup_mongo.py` | Remote RE Manager startup script — auto-uploaded on every restart |
 
+## Refactoring plan (proposed, not started)
+
+`docs/refactoring-plan.md` describes a phased plan to separate the UI from the services:
+
+- Qt-free `core/`, `services/` and `app/` layers under an enforced `ui → app → services → core`
+  dependency rule, checked with import-linter.
+- A serializable command/event API between the layers, with `ui/qt_bridge.py` as the only module
+  that knows both Qt and the services.
+
+The plan also lists invariants:
+
+- **A1–A8 (architectural):** targets for the refactor.
+- **D1–D8 (domain) and N1–N3 (numerical):** describe current behavior and hold today. Keep them
+  intact when changing scan numbering, plan-log matching, environment-transition detection, the
+  operator lock, the watchdog, DESC PVs, the remote `function_execute` names, or the
+  derivative/error code.
+- **N3 exception:** N3 also documents a known approximation in derivative error bars on uneven
+  x spacing. Its planned fix should land as its own behavior-changing commit.
+
 ## Connection settings (local only, never committed)
 
 Stored at `~/.easy_bluesky/connection.json`. Key fields per profile:

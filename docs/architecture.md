@@ -1,5 +1,9 @@
 # Architecture
 
+> **Planned refactor:** [refactoring-plan.md](refactoring-plan.md) proposes separating the Qt UI
+> from the services it uses, in phases. The Qt-free layers would be `core`, `services` and `app`,
+> with enforced import contracts between them. It also lists the invariants to preserve.
+
 ## Overview
 
 ```
