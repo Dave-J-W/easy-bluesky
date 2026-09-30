@@ -132,6 +132,7 @@ class MCAViewerWindow(QMainWindow):
 
         # pyqtgraph ROI region items — idx → LinearRegionItem
         self._regions: dict = {}
+        self._roi_visible: dict = {}   # idx → bool (default True)
 
         # Energy calibration (eV): E = _calo + _cals * channel
         self._calo: float = 0.0
@@ -338,7 +339,7 @@ class MCAViewerWindow(QMainWindow):
         return gc
 
     def _build_roi_table(self) -> QTableWidget:
-        cols = ["#", "Name", "Lo Ch", "Hi Ch", "Lo keV", "Hi keV", "Counts", "Del"]
+        cols = ["#", "Show", "Name", "Lo Ch", "Hi Ch", "Lo keV", "Hi keV", "Counts", "Del"]
         self._roi_table = QTableWidget(0, len(cols))
         self._roi_table.setHorizontalHeaderLabels(cols)
         self._roi_table.horizontalHeader().setSectionResizeMode(
@@ -536,6 +537,7 @@ class MCAViewerWindow(QMainWindow):
                 )
                 region.sigRegionChangeFinished.connect(
                     lambda reg, i=idx: self._on_region_moved(i, reg))
+                region.setVisible(self._roi_visible.get(idx, True))
                 self._plot_widget.addItem(region)
                 self._regions[idx] = region
         self._updating_roi = False
@@ -579,25 +581,42 @@ class MCAViewerWindow(QMainWindow):
                 return it
 
             self._roi_table.setItem(row, 0, _ro(str(idx)))
+
+            # Show/hide checkbox
+            chk_widget = QWidget()
+            chk_lay = QHBoxLayout(chk_widget)
+            chk_lay.setContentsMargins(0, 0, 0, 0)
+            chk_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            chk = QCheckBox()
+            chk.setChecked(self._roi_visible.get(idx, True))
+            chk.toggled.connect(lambda checked, i=idx: self._on_roi_visibility_toggled(i, checked))
+            chk_lay.addWidget(chk)
+            self._roi_table.setCellWidget(row, 1, chk_widget)
+
             name_item = QTableWidgetItem(roi['name'])
             name_item.setData(Qt.ItemDataRole.UserRole, idx)
-            self._roi_table.setItem(row, 1, name_item)
-            self._roi_table.setItem(row, 2, _ro(str(lo)))
-            self._roi_table.setItem(row, 3, _ro(str(hi)))
-            self._roi_table.setItem(row, 4, _ro(f"{lo_kev:.3f}" if lo_kev is not None else "—"))
-            self._roi_table.setItem(row, 5, _ro(f"{hi_kev:.3f}" if hi_kev is not None else "—"))
-            self._roi_table.setItem(row, 6, _ro(f"{roi['counts']:.0f}"))
+            self._roi_table.setItem(row, 2, name_item)
+            self._roi_table.setItem(row, 3, _ro(str(lo)))
+            self._roi_table.setItem(row, 4, _ro(str(hi)))
+            self._roi_table.setItem(row, 5, _ro(f"{lo_kev:.3f}" if lo_kev is not None else "—"))
+            self._roi_table.setItem(row, 6, _ro(f"{hi_kev:.3f}" if hi_kev is not None else "—"))
+            self._roi_table.setItem(row, 7, _ro(f"{roi['counts']:.0f}"))
 
             del_btn = QPushButton("✕")
             del_btn.setStyleSheet("color:#dc6d6d; font-weight:bold; padding:0px 4px;")
             del_btn.setFixedWidth(28)
             del_btn.clicked.connect(lambda _c, i=idx: self._delete_roi(i))
-            self._roi_table.setCellWidget(row, 7, del_btn)
+            self._roi_table.setCellWidget(row, 8, del_btn)
 
         self._roi_table.blockSignals(False)
 
+    def _on_roi_visibility_toggled(self, idx: int, visible: bool):
+        self._roi_visible[idx] = visible
+        if _HAS_PG and idx in self._regions:
+            self._regions[idx].setVisible(visible)
+
     def _on_table_name_edited(self, item: QTableWidgetItem):
-        if item.column() != 1:
+        if item.column() != 2:
             return
         idx = item.data(Qt.ItemDataRole.UserRole)
         if idx is None:
