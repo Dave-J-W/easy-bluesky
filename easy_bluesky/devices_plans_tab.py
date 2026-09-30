@@ -726,6 +726,15 @@ class DevicesPlansTab(QWidget):
         sim_dev_set = (set(pv_map) - set(epics_pv_map)
                        - {d for d in pv_map if d.startswith('__')})
 
+        # Deduplicate: remove entries whose device name has no tree row.
+        # get_device_pvnames() can return both 'mca1' and 'mca1_roi0_count'
+        # (the signal object exported to the namespace alongside the device).
+        # They map to the same PV; the second overwrites the first in _map,
+        # routing updates to a phantom key.  Keep only entries for devices
+        # that appear in the tree (_device_items).
+        epics_pv_map = {dev: sigs for dev, sigs in epics_pv_map.items()
+                        if dev in self._device_items}
+
         # ── Signal sub-rows + tweak widgets for EPICS devices ────────────
         for dev_name, sigs in epics_pv_map.items():
             item = self._device_items.get(dev_name)
