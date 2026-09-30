@@ -198,6 +198,26 @@ class _EpicsInstaller(QThread):
             self.done.emit(False, str(e))
 
 
+# ── pyepics stderr noise filter ─────────────────────────────────────────────────
+
+class _CAStderrFilter:
+    """Wraps sys.stderr to drop pyepics 'cannot connect to …' spam lines."""
+    _SUPPRESS = ("cannot connect to",)
+
+    def __init__(self, real):
+        self._real = real
+
+    def write(self, s: str):
+        if not any(p in s for p in self._SUPPRESS):
+            self._real.write(s)
+
+    def flush(self):
+        self._real.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
 # ── EPICS CA monitor ────────────────────────────────────────────────────────────
 
 class _EPICSMonitor(QObject):
@@ -240,6 +260,10 @@ class _EPICSMonitor(QObject):
             import epics
         except ImportError:
             return
+
+        import sys
+        if not isinstance(sys.stderr, _CAStderrFilter):
+            sys.stderr = _CAStderrFilter(sys.stderr)
 
         for dev_name, sigs in pv_map.items():
             for sig_name, pvname in sigs.items():
@@ -830,6 +854,7 @@ class DevicesPlansTab(QWidget):
         # (e.g. .R0) when the MCA is idle.  _do_fetch (queued signal) handles
         # most cases; this timer catches anything that slipped through.
         if total > 0:
+            self._fallback_attempt = 0
             QTimer.singleShot(4000, self._fallback_read_stuck_pvs)
 
         # ── Start polling timer for any polled devices ───────────────────
@@ -920,15 +945,18 @@ class DevicesPlansTab(QWidget):
 
         self._apply_plan_filter()
 
-    def _fallback_read_stuck_pvs(self):
-        """Called ~4 s after setup; retries every 6 s while stuck PVs remain.
+    _MAX_FALLBACK_ATTEMPTS = 3   # after 4 s + 3×6 s ≈ 22 s, give up
 
-        Identifies stuck PVs in the main thread, then reads them in a daemon
-        thread so the blocking caget() calls never freeze the UI.  Results are
-        delivered back via _EPICSMonitor._on_change → value_changed signal,
-        which is already safe to emit from background threads (pyqtSignal uses
-        a queued delivery when the receiver lives in a different thread).
+    def _fallback_read_stuck_pvs(self):
+        """Called ~4 s after setup; retries up to _MAX_FALLBACK_ATTEMPTS times.
+
+        After the final attempt any PV still 'Connecting…' is marked 'Not
+        Available' in red so the user knows it is unreachable.  caget() calls
+        run in a daemon thread so they never freeze the UI.
         """
+        self._fallback_attempt = getattr(self, '_fallback_attempt', 0) + 1
+        is_final = self._fallback_attempt >= self._MAX_FALLBACK_ATTEMPTS
+
         stuck = []
         for pvname in list(self._epics_monitor._pvs):
             pairs = self._epics_monitor._map.get(pvname)
@@ -959,8 +987,37 @@ class DevicesPlansTab(QWidget):
                     pass
 
         threading.Thread(target=_bg, daemon=True).start()
-        # Always reschedule; the next call exits early if nothing is stuck.
-        QTimer.singleShot(6000, self._fallback_read_stuck_pvs)
+
+        if is_final:
+            # Schedule "Not Available" labelling after the bg thread has had time
+            # to deliver any last-moment values (200 ms grace).
+            QTimer.singleShot(200, self._mark_unavailable_pvs)
+        else:
+            QTimer.singleShot(6000, self._fallback_read_stuck_pvs)
+
+    def _mark_unavailable_pvs(self):
+        """Label any tree items still 'Connecting…' as 'Not Available' in red."""
+        red = QColor("#e05050")
+        for pvname in list(self._epics_monitor._pvs):
+            pairs = self._epics_monitor._map.get(pvname)
+            if not pairs:
+                continue
+            for dev_name, sig_name in pairs:
+                sig_item = self._signal_items.get((dev_name, sig_name))
+                if sig_item is None:
+                    continue
+                if "Connecting" in sig_item.text(2) or sig_item.text(2) == "○ —":
+                    sig_item.setText(2, "Not Available")
+                    sig_item.setForeground(2, red)
+                    sig_item.setText(3, "")
+                # Mirror to device row if this is the primary signal
+                if self._primary_signal.get(dev_name) == sig_name:
+                    dev_item = self._device_items.get(dev_name)
+                    if dev_item and (
+                        "Connecting" in dev_item.text(2) or dev_item.text(2) == "○ —"
+                    ):
+                        dev_item.setText(2, "Not Available")
+                        dev_item.setForeground(2, red)
 
     # ── Internal ────────────────────────────────────────────────────────────────
 
