@@ -978,7 +978,17 @@ class DevicesPlansTab(QWidget):
 
         def _bg():
             import epics as _ep
+            try:
+                # Bind this thread to the existing CA context so ca_pend_io
+                # uses the same context as the main thread.  Without this the
+                # call crashes with SIGSEGV if the context is torn down during
+                # app shutdown while the thread is still inside ca_pend_io.
+                _ep.ca.use_initial_context()
+            except Exception:
+                return
             for pvname in stuck:
+                if not monitor._alive:
+                    return
                 try:
                     val = _ep.caget(pvname, timeout=0.5)
                     if val is not None and monitor._alive:
