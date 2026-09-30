@@ -31,7 +31,7 @@ except ImportError:
 
 _MCA_SETTINGS_PATH = Path.home() / ".easy_bluesky" / "mca_viewer_settings.json"
 
-_N_ROIS = 5
+_N_ROIS = 16   # fallback when pv_map carries no ROI signals
 
 # Semi-transparent RGBA colors for ROI bands
 _ROI_COLORS = [
@@ -83,6 +83,23 @@ def extract_mca_prefix(pv_map: dict) -> str | None:
     return None
 
 
+def detect_n_rois(pv_map: dict) -> int:
+    """Count ROI slots from the ophyd pv_map (PVs ending in .R{N}).
+
+    Returns max(N)+1 so the viewer only subscribes to the ROIs the device
+    actually exposes.  Falls back to _N_ROIS if no ROI PVs are found.
+    """
+    roi_pat = re.compile(r'\.R(\d+)$')
+    indices = set()
+    for pv in pv_map.values():
+        if not pv:
+            continue
+        m = roi_pat.search(pv)
+        if m:
+            indices.add(int(m.group(1)))
+    return max(indices) + 1 if indices else _N_ROIS
+
+
 class MCAViewerWindow(QMainWindow):
     """Floating live MCA viewer driven by IOC ROI PVs — no PyMCA required."""
 
@@ -99,6 +116,7 @@ class MCAViewerWindow(QMainWindow):
         self._pv_map      = pv_map or {}
         self._alive       = True
         self._live        = True
+        self._n_rois      = detect_n_rois(self._pv_map)
 
         # CA PV handles — strong references to prevent GC
         self._pvs: list = []
@@ -106,10 +124,10 @@ class MCAViewerWindow(QMainWindow):
         # Per-ROI reverse lookup: pvname → (idx, field)
         self._roi_pv_idx: dict = {}   # pvname → (idx, 'lo'|'hi'|'nm'|'counts')
 
-        # ROI state — 16 slots
+        # ROI state — one slot per ROI exposed by the ophyd device
         self._rois: list[dict] = [
             {'lo': 0, 'hi': 0, 'name': '', 'counts': 0.0}
-            for _ in range(_N_ROIS)
+            for _ in range(self._n_rois)
         ]
 
         # pyqtgraph ROI region items — idx → LinearRegionItem
@@ -379,7 +397,7 @@ class MCAViewerWindow(QMainWindow):
         _mk(f"{prefix}.CALO", self._on_cal_cb)
         _mk(f"{prefix}.CALS", self._on_cal_cb)
 
-        for n in range(_N_ROIS):
+        for n in range(self._n_rois):
             for field, key in (
                 (f"{prefix}.R{n}",    'counts'),
                 (f"{prefix}.R{n}LO",  'lo'),
@@ -612,7 +630,7 @@ class MCAViewerWindow(QMainWindow):
         # Find first inactive slot
         slot = next((i for i, r in enumerate(self._rois) if r['hi'] <= r['lo']), None)
         if slot is None:
-            self._set_status("⚠ All 16 ROI slots are in use", "#e05050")
+            self._set_status(f"⚠ All {self._n_rois} ROI slots are in use", "#e05050")
             return
 
         name, ok = QInputDialog.getText(self, "Add ROI", f"Name for ROI {slot}:")
