@@ -124,6 +124,13 @@ class MCAViewerWindow(QMainWindow):
         self._pending_cal_gain:   float = 0.0
         self._pending_cal_offset: float = 0.0
 
+        # Cached status/cal values — updated directly from CA callbacks
+        self._ertm: float = 0.0
+        self._eltm: float = 0.0
+        self._acqg: bool  = False
+        self._calo_ioc: float = 0.0
+        self._cals_ioc: float = 0.0
+
         self._spectrum_received.connect(self._on_new_spectrum)
         self._roi_cb_received.connect(self._on_roi_update)
         self._status_received.connect(self._on_status_update)
@@ -392,41 +399,24 @@ class MCAViewerWindow(QMainWindow):
     def _on_status_cb(self, pvname='', value=None, **kw):
         if not self._alive or value is None:
             return
-        # Collect current values and emit; missing ones stay at defaults
-        ertm = eltm = 0.0
-        acqg = False
-        try:
-            import epics as _ep
-            ertm_pv = f"{self._prefix}.ERTM"
-            eltm_pv = f"{self._prefix}.ELTM"
-            acqg_pv = f"{self._prefix}.ACQG"
-            for pv in self._pvs:
-                if pv.pvname == ertm_pv and pv.value is not None:
-                    ertm = float(pv.value)
-                elif pv.pvname == eltm_pv and pv.value is not None:
-                    eltm = float(pv.value)
-                elif pv.pvname == acqg_pv and pv.value is not None:
-                    acqg = bool(pv.value)
-        except Exception:
-            pass
-        self._status_received.emit(ertm, eltm, acqg)
+        field = pvname.rsplit('.', 1)[-1] if '.' in pvname else pvname
+        if field == 'ERTM':
+            self._ertm = float(value)
+        elif field == 'ELTM':
+            self._eltm = float(value)
+        elif field == 'ACQG':
+            self._acqg = bool(value)
+        self._status_received.emit(self._ertm, self._eltm, self._acqg)
 
     def _on_cal_cb(self, pvname='', value=None, **kw):
         if not self._alive or value is None:
             return
-        calo = self._calo
-        cals = self._cals
-        try:
-            calo_pv = f"{self._prefix}.CALO"
-            cals_pv = f"{self._prefix}.CALS"
-            for pv in self._pvs:
-                if pv.pvname == calo_pv and pv.value is not None:
-                    calo = float(pv.value)
-                elif pv.pvname == cals_pv and pv.value is not None:
-                    cals = float(pv.value)
-        except Exception:
-            pass
-        self._cal_received.emit(calo, cals)
+        field = pvname.rsplit('.', 1)[-1] if '.' in pvname else pvname
+        if field == 'CALO':
+            self._calo_ioc = float(value)
+        elif field == 'CALS':
+            self._cals_ioc = float(value)
+        self._cal_received.emit(self._calo_ioc, self._cals_ioc)
 
     def _on_roi_cb(self, pvname='', value=None, **kw):
         if not self._alive or value is None:
@@ -845,14 +835,8 @@ class MCAViewerWindow(QMainWindow):
         self._btn_apply_cal.setEnabled(False)
         self._btn_write_ioc.setEnabled(False)
         # Revert to IOC calibration
-        self._calo = 0.0
-        self._cals = 0.0
-        # Re-read from PVs if connected
-        for pv in self._pvs:
-            if pv.pvname == f"{self._prefix}.CALO" and pv.value is not None:
-                self._calo = float(pv.value)
-            elif pv.pvname == f"{self._prefix}.CALS" and pv.value is not None:
-                self._cals = float(pv.value)
+        self._calo = self._calo_ioc
+        self._cals = self._cals_ioc
         has_cal = abs(self._cals) > 1e-9
         self._chk_kev.setEnabled(has_cal)
         if not has_cal:

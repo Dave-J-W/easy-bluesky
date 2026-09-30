@@ -201,8 +201,8 @@ class _EpicsInstaller(QThread):
 # ── pyepics stderr noise filter ─────────────────────────────────────────────────
 
 class _CAStderrFilter:
-    """Wraps sys.stderr to drop pyepics 'cannot connect to …' spam lines."""
-    _SUPPRESS = ("cannot connect to",)
+    """Wraps sys.stderr to drop pyepics CA noise lines."""
+    _SUPPRESS = ("cannot connect to", "ca.get(", "timed out after")
 
     def __init__(self, real):
         self._real = real
