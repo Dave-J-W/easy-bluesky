@@ -3,7 +3,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QLabel,
     QTreeWidget, QTreeWidgetItem,
-    QPlainTextEdit, QPushButton, QDoubleSpinBox, QLineEdit, QComboBox, QMenu,
+    QPlainTextEdit, QPushButton, QDoubleSpinBox, QLineEdit, QComboBox, QMenu, QToolButton,
     QMessageBox, QDialog, QFormLayout, QDialogButtonBox, QCheckBox,
 )
 from .widgets import NoScrollDoubleSpinBox
@@ -1142,21 +1142,41 @@ class DevicesPlansTab(QWidget):
         return w
 
     def _make_xrf_button(self, dev_name: str) -> QWidget:
-        """Inline 'Open XRF Viewer' button for MCA/XRF devices."""
+        """Inline dropdown button offering both MCA/XRF viewer options."""
         w = QWidget()
         h = QHBoxLayout(w)
         h.setContentsMargins(2, 1, 2, 1)
-        btn = QPushButton("📊 Open XRF Viewer")
+        h.addWidget(self._make_xrf_tool_button(dev_name, full_label=True))
+        return w
+
+    def _make_xrf_tool_button(self, dev_name: str, full_label: bool = False) -> QToolButton:
+        btn = QToolButton()
+        btn.setText("📊 Open XRF Viewer" if full_label else "📊 XRF")
         btn.setFixedHeight(22)
         btn.setStyleSheet("padding: 1px 6px;")
-        btn.setToolTip(f"Open XRF/MCA spectrum viewer for {dev_name}")
+        btn.setToolTip(f"Open spectrum viewer for {dev_name}")
+        btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        menu = QMenu(btn)
+        act_xrf = menu.addAction("Open XRF Viewer (PyMCA)")
+        act_mca = menu.addAction("Open MCA Viewer (IOC ROIs)")
+        btn.setMenu(menu)
+        # Default click (arrow-less part) opens PyMCA viewer
         btn.clicked.connect(
-            lambda _checked, n=dev_name: self._open_xrf_viewer(
+            lambda _c, n=dev_name: self._open_xrf_viewer(
                 n, self._pv_map_cache.get(n, {}), force_dialog=False
             )
         )
-        h.addWidget(btn)
-        return w
+        act_xrf.triggered.connect(
+            lambda _c, n=dev_name: self._open_xrf_viewer(
+                n, self._pv_map_cache.get(n, {}), force_dialog=False
+            )
+        )
+        act_mca.triggered.connect(
+            lambda _c, n=dev_name: self._open_mca_viewer(
+                n, self._pv_map_cache.get(n, {})
+            )
+        )
+        return btn
 
     def _make_ad_xrf_buttons(self, dev_name: str) -> QWidget:
         """Inline AD + XRF buttons side-by-side for devices that are both."""
@@ -1173,17 +1193,8 @@ class DevicesPlansTab(QWidget):
                 n, self._pv_map_cache.get(n, {}), force_dialog=False
             )
         )
-        xrf_btn = QPushButton("📊 XRF")
-        xrf_btn.setFixedHeight(22)
-        xrf_btn.setStyleSheet("padding: 1px 6px;")
-        xrf_btn.setToolTip(f"Open XRF/MCA spectrum viewer for {dev_name}")
-        xrf_btn.clicked.connect(
-            lambda _checked, n=dev_name: self._open_xrf_viewer(
-                n, self._pv_map_cache.get(n, {}), force_dialog=False
-            )
-        )
         h.addWidget(ad_btn)
-        h.addWidget(xrf_btn)
+        h.addWidget(self._make_xrf_tool_button(dev_name, full_label=False))
         return w
 
     def _make_tweak_widget(self, dev_name: str, setpoint_pvname: str | None) -> QWidget:
