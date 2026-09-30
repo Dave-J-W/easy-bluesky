@@ -215,7 +215,7 @@ class _EPICSMonitor(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._pvs: dict      = {}   # pvname → epics.PV  (strong refs)
-        self._map: dict      = {}   # pvname → (dev_name, sig_name)
+        self._map: dict      = {}   # pvname → [(dev_name, sig_name), ...]  (list — multiple signals may share one PV)
         self._desc_pvs: dict = {}   # record.DESC → epics.PV  (one per record base)
         self._desc_map: dict = {}   # record.DESC → [(dev_name, sig_name), ...]
         self._alive: bool    = True  # guards callbacks after Qt C++ deletion
@@ -241,38 +241,33 @@ class _EPICSMonitor(QObject):
         except ImportError:
             return
 
-        # Flatten to (dev, sig, pvname) triples, device-level entries first.
-        entries = [
-            (dev, sig, pv)
-            for dev, sigs in pv_map.items()
-            for sig, pv in sigs.items()
-            if pv
-        ]
-        entries.sort(key=lambda e: e[0] == e[1])   # dev==sig sorts last (True > False)
-
-        for dev_name, sig_name, pvname in entries:
-            if pvname in self._map:
-                continue   # already claimed by a device-level entry
-            self._map[pvname] = (dev_name, sig_name)
-            pv = epics.PV(
-                pvname,
-                auto_monitor=True,
-                form='time',             # DBR_TIME: universally supported
-                callback=self._on_change,
-                connection_callback=self._on_connect,
-            )
-            self._pvs[pvname] = pv
-            # Strip field suffix (e.g. "IOC:M1.RBV" → "IOC:M1") then add .DESC.
-            # Appending .DESC directly would give "IOC:M1.RBV.DESC" (invalid).
-            record_base = pvname.rsplit('.', 1)[0] if '.' in pvname else pvname
-            desc_pvname = record_base + ".DESC"
-            self._desc_map.setdefault(desc_pvname, []).append((dev_name, sig_name))
-            if desc_pvname not in self._desc_pvs:
-                self._desc_pvs[desc_pvname] = epics.PV(
-                    desc_pvname,
-                    auto_monitor=True,
-                    callback=self._on_desc_change,
-                )
+        for dev_name, sigs in pv_map.items():
+            for sig_name, pvname in sigs.items():
+                if not pvname:
+                    continue
+                # Multiple signals may share one PV (e.g. readback / user_readback).
+                # Append to the list so every signal gets notified on each callback.
+                self._map.setdefault(pvname, []).append((dev_name, sig_name))
+                if pvname not in self._pvs:
+                    pv = epics.PV(
+                        pvname,
+                        auto_monitor=True,
+                        form='time',             # DBR_TIME: universally supported
+                        callback=self._on_change,
+                        connection_callback=self._on_connect,
+                    )
+                    self._pvs[pvname] = pv
+                # Strip field suffix (e.g. "IOC:M1.RBV" → "IOC:M1") then add .DESC.
+                # Appending .DESC directly would give "IOC:M1.RBV.DESC" (invalid).
+                record_base = pvname.rsplit('.', 1)[0] if '.' in pvname else pvname
+                desc_pvname = record_base + ".DESC"
+                self._desc_map.setdefault(desc_pvname, []).append((dev_name, sig_name))
+                if desc_pvname not in self._desc_pvs:
+                    self._desc_pvs[desc_pvname] = epics.PV(
+                        desc_pvname,
+                        auto_monitor=True,
+                        callback=self._on_desc_change,
+                    )
 
     def clear(self):
         self._alive = False   # block in-flight CA callbacks from emitting
@@ -290,20 +285,18 @@ class _EPICSMonitor(QObject):
     def _on_change(self, pvname='', value=None, units='', **kw):
         if not self._alive or value is None:
             return
-        info = self._map.get(pvname)
-        if info:
+        for dev_name, sig_name in self._map.get(pvname, []):
             try:
-                self.value_changed.emit(info[0], info[1], value, units or '')
+                self.value_changed.emit(dev_name, sig_name, value, units or '')
             except RuntimeError:
                 pass
 
     def _on_connect(self, pvname='', conn=True, **kw):
         if not self._alive:
             return
-        info = self._map.get(pvname)
-        if info:
+        for dev_name, sig_name in self._map.get(pvname, []):
             try:
-                self.connection_changed.emit(info[0], info[1], bool(conn))
+                self.connection_changed.emit(dev_name, sig_name, bool(conn))
             except RuntimeError:
                 pass
         if conn:
@@ -938,16 +931,17 @@ class DevicesPlansTab(QWidget):
         """
         stuck = []
         for pvname in list(self._epics_monitor._pvs):
-            info = self._epics_monitor._map.get(pvname)
-            if info is None:
+            pairs = self._epics_monitor._map.get(pvname)
+            if not pairs:
                 continue
-            dev_name, sig_name = info
-            sig_item = self._signal_items.get((dev_name, sig_name))
-            if sig_item is None:
-                continue
-            txt = sig_item.text(2)
-            if "Connecting" in txt or txt == "○ —":
-                stuck.append(pvname)
+            for dev_name, sig_name in pairs:
+                sig_item = self._signal_items.get((dev_name, sig_name))
+                if sig_item is None:
+                    continue
+                txt = sig_item.text(2)
+                if "Connecting" in txt or txt == "○ —":
+                    stuck.append(pvname)
+                    break
 
         if not stuck:
             return
