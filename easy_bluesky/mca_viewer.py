@@ -6,11 +6,11 @@ from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QCloseEvent
+from PyQt6.QtGui import QCloseEvent, QColor
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QDoubleSpinBox, QGroupBox, QHBoxLayout,
-    QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow, QPushButton,
-    QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QCheckBox, QColorDialog, QDoubleSpinBox, QGroupBox,
+    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow,
+    QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 try:
@@ -132,7 +132,8 @@ class MCAViewerWindow(QMainWindow):
 
         # pyqtgraph ROI region items — idx → LinearRegionItem
         self._regions: dict = {}
-        self._roi_visible: dict = {}   # idx → bool (default True)
+        self._roi_visible: dict = {}              # idx → bool (default True)
+        self._roi_colors: dict = {}               # idx → (r, g, b)
 
         # Energy calibration (eV): E = _calo + _cals * channel
         self._calo: float = 0.0
@@ -339,7 +340,7 @@ class MCAViewerWindow(QMainWindow):
         return gc
 
     def _build_roi_table(self) -> QTableWidget:
-        cols = ["#", "Show", "Name", "Lo Ch", "Hi Ch", "Lo keV", "Hi keV", "Counts", "Del"]
+        cols = ["#", "Show", "Color", "Name", "Lo Ch", "Hi Ch", "Lo keV", "Hi keV", "Counts", "Del"]
         self._roi_table = QTableWidget(0, len(cols))
         self._roi_table.setHorizontalHeaderLabels(cols)
         self._roi_table.horizontalHeader().setSectionResizeMode(
@@ -522,10 +523,10 @@ class MCAViewerWindow(QMainWindow):
             if idx in self._regions:
                 self._regions[idx].setRegion((x_lo, x_hi))
             else:
-                r, g, b, a = _ROI_COLORS[idx % len(_ROI_COLORS)]
+                r, g, b = self._roi_color(idx)
                 region = pg.LinearRegionItem(
                     values=(x_lo, x_hi),
-                    brush=pg.mkBrush(r, g, b, a),
+                    brush=pg.mkBrush(r, g, b, 60),
                     pen=pg.mkPen(r, g, b, 180),
                     movable=True,
                 )
@@ -593,20 +594,35 @@ class MCAViewerWindow(QMainWindow):
             chk_lay.addWidget(chk)
             self._roi_table.setCellWidget(row, 1, chk_widget)
 
+            # Color picker button
+            r, g, b = self._roi_color(idx)
+            col_btn = QPushButton()
+            col_btn.setFixedSize(24, 18)
+            col_btn.setStyleSheet(
+                f"background: rgb({r},{g},{b}); border: 1px solid #555; border-radius: 2px;")
+            col_btn.setToolTip("Click to change ROI colour")
+            col_btn.clicked.connect(lambda _c, i=idx: self._on_roi_color_clicked(i))
+            col_w = QWidget()
+            col_lay = QHBoxLayout(col_w)
+            col_lay.setContentsMargins(2, 1, 2, 1)
+            col_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            col_lay.addWidget(col_btn)
+            self._roi_table.setCellWidget(row, 2, col_w)
+
             name_item = QTableWidgetItem(roi['name'])
             name_item.setData(Qt.ItemDataRole.UserRole, idx)
-            self._roi_table.setItem(row, 2, name_item)
-            self._roi_table.setItem(row, 3, _ro(str(lo)))
-            self._roi_table.setItem(row, 4, _ro(str(hi)))
-            self._roi_table.setItem(row, 5, _ro(f"{lo_kev:.3f}" if lo_kev is not None else "—"))
-            self._roi_table.setItem(row, 6, _ro(f"{hi_kev:.3f}" if hi_kev is not None else "—"))
-            self._roi_table.setItem(row, 7, _ro(f"{roi['counts']:.0f}"))
+            self._roi_table.setItem(row, 3, name_item)
+            self._roi_table.setItem(row, 4, _ro(str(lo)))
+            self._roi_table.setItem(row, 5, _ro(str(hi)))
+            self._roi_table.setItem(row, 6, _ro(f"{lo_kev:.3f}" if lo_kev is not None else "—"))
+            self._roi_table.setItem(row, 7, _ro(f"{hi_kev:.3f}" if hi_kev is not None else "—"))
+            self._roi_table.setItem(row, 8, _ro(f"{roi['counts']:.0f}"))
 
             del_btn = QPushButton("✕")
             del_btn.setStyleSheet("color:#dc6d6d; font-weight:bold; padding:0px 4px;")
             del_btn.setFixedWidth(28)
             del_btn.clicked.connect(lambda _c, i=idx: self._delete_roi(i))
-            self._roi_table.setCellWidget(row, 8, del_btn)
+            self._roi_table.setCellWidget(row, 9, del_btn)
 
         self._roi_table.blockSignals(False)
 
@@ -615,8 +631,33 @@ class MCAViewerWindow(QMainWindow):
         if _HAS_PG and idx in self._regions:
             self._regions[idx].setVisible(visible)
 
+    def _roi_color(self, idx: int) -> tuple:
+        if idx not in self._roi_colors:
+            r, g, b, _ = _ROI_COLORS[idx % len(_ROI_COLORS)]
+            self._roi_colors[idx] = (r, g, b)
+        return self._roi_colors[idx]
+
+    def _on_roi_color_clicked(self, idx: int):
+        r, g, b = self._roi_color(idx)
+        initial = QColor(r, g, b)
+        color = QColorDialog.getColor(initial, self, f"ROI {idx} colour")
+        if not color.isValid():
+            return
+        self._roi_colors[idx] = (color.red(), color.green(), color.blue())
+        if _HAS_PG and idx in self._regions:
+            self._apply_region_color(idx)
+        self._rebuild_table()
+
+    def _apply_region_color(self, idx: int):
+        r, g, b = self._roi_color(idx)
+        region = self._regions[idx]
+        region.setBrush(pg.mkBrush(r, g, b, 60))
+        pen = pg.mkPen(r, g, b, 180)
+        for line in region.lines:
+            line.setPen(pen)
+
     def _on_table_name_edited(self, item: QTableWidgetItem):
-        if item.column() != 2:
+        if item.column() != 3:
             return
         idx = item.data(Qt.ItemDataRole.UserRole)
         if idx is None:
