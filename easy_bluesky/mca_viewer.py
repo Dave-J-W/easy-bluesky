@@ -6,12 +6,22 @@ from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QCloseEvent, QColor
+from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
     QAbstractItemView, QCheckBox, QDoubleSpinBox, QGroupBox, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow, QPushButton,
     QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
+
+try:
+    from scipy.optimize import curve_fit as _curve_fit
+    from scipy.signal import find_peaks as _find_peaks
+    _HAS_SCIPY = True
+except ImportError:
+    _HAS_SCIPY = False
+
+_FE55_KA_EV = 5895.0   # Mn Kα (eV)
+_FE55_KB_EV = 6490.4   # Mn Kβ1 (eV)
 
 try:
     import pyqtgraph as pg
@@ -111,6 +121,8 @@ class MCAViewerWindow(QMainWindow):
 
         self._last_counts: np.ndarray | None = None
         self._updating_roi = False   # suppress write-back during programmatic updates
+        self._pending_cal_gain:   float = 0.0
+        self._pending_cal_offset: float = 0.0
 
         self._spectrum_received.connect(self._on_new_spectrum)
         self._roi_cb_received.connect(self._on_roi_update)
@@ -145,10 +157,7 @@ class MCAViewerWindow(QMainWindow):
             self._plot_widget.showGrid(x=True, y=True, alpha=0.2)
             self._plot_widget.setLabel('left', 'Counts')
             self._plot_widget.setLabel('bottom', 'Channel')
-            self._curve = pg.PlotCurveItem(
-                np.array([0.0]), np.array([0.0]),
-                stepMode='center', pen=pg.mkPen('w', width=1),
-            )
+            self._curve = pg.PlotCurveItem(pen=pg.mkPen('w', width=1))
             self._plot_widget.addItem(self._curve)
 
             # Cursor line
@@ -247,8 +256,61 @@ class MCAViewerWindow(QMainWindow):
         btn_add.clicked.connect(self._on_add_roi)
         lay.addWidget(btn_add)
 
+        lay.addWidget(self._build_calibration_panel())
+
         lay.addStretch()
         return panel
+
+    def _build_calibration_panel(self) -> QGroupBox:
+        gc = QGroupBox("Calibrate — Fe-55")
+        gcl = QVBoxLayout(gc)
+        gcl.setSpacing(5)
+
+        gcl.addWidget(QLabel(f"Mn Kα  ({_FE55_KA_EV:.1f} eV)"))
+        self._spin_ka = QDoubleSpinBox()
+        self._spin_ka.setRange(0, 65535)
+        self._spin_ka.setDecimals(1)
+        self._spin_ka.setSuffix(" ch")
+        self._spin_ka.setValue(0.0)
+        self._spin_ka.wheelEvent = lambda e: e.ignore()
+        self._spin_ka.valueChanged.connect(self._on_cal_channels_changed)
+        gcl.addWidget(self._spin_ka)
+
+        gcl.addWidget(QLabel(f"Mn Kβ  ({_FE55_KB_EV:.1f} eV)"))
+        self._spin_kb = QDoubleSpinBox()
+        self._spin_kb.setRange(0, 65535)
+        self._spin_kb.setDecimals(1)
+        self._spin_kb.setSuffix(" ch")
+        self._spin_kb.setValue(0.0)
+        self._spin_kb.wheelEvent = lambda e: e.ignore()
+        self._spin_kb.valueChanged.connect(self._on_cal_channels_changed)
+        gcl.addWidget(self._spin_kb)
+
+        btn_fit = QPushButton("Auto-fit peaks")
+        btn_fit.setToolTip("Fit Gaussians to Mn Kα/Kβ peaks (requires scipy)")
+        btn_fit.clicked.connect(self._on_autofit_fe55)
+        gcl.addWidget(btn_fit)
+
+        self._cal_result_lbl = QLabel("Gain:   —\nOffset: —")
+        self._cal_result_lbl.setStyleSheet("color:#aaa; font-size:11px;")
+        gcl.addWidget(self._cal_result_lbl)
+
+        row = QHBoxLayout()
+        self._btn_apply_cal = QPushButton("Apply")
+        self._btn_apply_cal.setEnabled(False)
+        self._btn_apply_cal.clicked.connect(self._on_apply_calibration)
+        self._btn_write_ioc = QPushButton("→ IOC")
+        self._btn_write_ioc.setEnabled(False)
+        self._btn_write_ioc.setToolTip("Write calibration to IOC CALO/CALS PVs")
+        self._btn_write_ioc.clicked.connect(self._on_write_cal_to_ioc)
+        btn_clear = QPushButton("Clear")
+        btn_clear.clicked.connect(self._on_clear_calibration)
+        row.addWidget(self._btn_apply_cal)
+        row.addWidget(self._btn_write_ioc)
+        row.addWidget(btn_clear)
+        gcl.addLayout(row)
+
+        return gc
 
     def _build_roi_table(self) -> QTableWidget:
         cols = ["#", "Name", "Lo Ch", "Hi Ch", "Lo keV", "Hi keV", "Counts", "Del"]
@@ -700,6 +762,104 @@ class MCAViewerWindow(QMainWindow):
             'show_kev': self._chk_kev.isChecked(),
         })
         _save_settings(settings)
+
+    # ── Fe-55 calibration ─────────────────────────────────────────────────────
+
+    def _fit_gaussian_centroid(self, counts: np.ndarray, center: int,
+                               half_win: int = 60) -> float | None:
+        lo = max(0, center - half_win)
+        hi = min(len(counts), center + half_win)
+        x = np.arange(lo, hi, dtype=float)
+        y = counts[lo:hi].astype(float)
+        if y.max() < 10:
+            return None
+        try:
+            def _gauss(x, amp, mu, sig):
+                return amp * np.exp(-0.5 * ((x - mu) / sig) ** 2)
+            p0 = [y.max(), float(center), 10.0]
+            popt, _ = _curve_fit(_gauss, x, y, p0=p0, maxfev=2000)
+            return float(popt[1])
+        except Exception:
+            return None
+
+    def _on_autofit_fe55(self):
+        if not _HAS_SCIPY:
+            self._set_status("⚠ scipy not installed — pip install scipy", "#e05050")
+            return
+        if self._last_counts is None:
+            self._set_status("⚠ No spectrum loaded", "#e05050")
+            return
+        counts = self._last_counts
+        peaks, props = _find_peaks(counts, height=counts.max() * 0.1,
+                                   distance=20, prominence=counts.max() * 0.05)
+        if len(peaks) < 2:
+            self._set_status("⚠ Could not find two peaks for Fe-55 calibration",
+                             "#e05050")
+            return
+        # Take the two tallest peaks
+        heights = props['peak_heights']
+        top2 = peaks[np.argsort(heights)[-2:]]
+        ka_ch, kb_ch = sorted(top2)
+        ka_fit = self._fit_gaussian_centroid(counts, ka_ch)
+        kb_fit = self._fit_gaussian_centroid(counts, kb_ch)
+        if ka_fit is not None:
+            self._spin_ka.setValue(ka_fit)
+        if kb_fit is not None:
+            self._spin_kb.setValue(kb_fit)
+
+    def _on_cal_channels_changed(self):
+        ka_ch = self._spin_ka.value()
+        kb_ch = self._spin_kb.value()
+        if ka_ch <= 0 or kb_ch <= 0 or abs(kb_ch - ka_ch) < 1:
+            self._cal_result_lbl.setText("Gain:   —\nOffset: —")
+            self._btn_apply_cal.setEnabled(False)
+            self._btn_write_ioc.setEnabled(False)
+            return
+        # Two-point linear fit: E(ch) = offset + gain * ch  (in eV)
+        gain   = (_FE55_KB_EV - _FE55_KA_EV) / (kb_ch - ka_ch)
+        offset = _FE55_KA_EV - gain * ka_ch
+        self._pending_cal_gain   = gain
+        self._pending_cal_offset = offset
+        self._cal_result_lbl.setText(
+            f"Gain:   {gain:.4f} eV/ch\nOffset: {offset:.2f} eV"
+        )
+        self._btn_apply_cal.setEnabled(True)
+        self._btn_write_ioc.setEnabled(bool(self._prefix))
+
+    def _on_apply_calibration(self):
+        self._calo = self._pending_cal_offset
+        self._cals = self._pending_cal_gain
+        self._chk_kev.setEnabled(True)
+        if self._last_counts is not None:
+            self._on_new_spectrum(self._last_counts)
+        self._refresh_rois()
+
+    def _on_write_cal_to_ioc(self):
+        self._ca_put('.CALO', self._pending_cal_offset)
+        self._ca_put('.CALS', self._pending_cal_gain)
+
+    def _on_clear_calibration(self):
+        self._spin_ka.setValue(0.0)
+        self._spin_kb.setValue(0.0)
+        self._cal_result_lbl.setText("Gain:   —\nOffset: —")
+        self._btn_apply_cal.setEnabled(False)
+        self._btn_write_ioc.setEnabled(False)
+        # Revert to IOC calibration
+        self._calo = 0.0
+        self._cals = 0.0
+        # Re-read from PVs if connected
+        for pv in self._pvs:
+            if pv.pvname == f"{self._prefix}.CALO" and pv.value is not None:
+                self._calo = float(pv.value)
+            elif pv.pvname == f"{self._prefix}.CALS" and pv.value is not None:
+                self._cals = float(pv.value)
+        has_cal = abs(self._cals) > 1e-9
+        self._chk_kev.setEnabled(has_cal)
+        if not has_cal:
+            self._chk_kev.setChecked(False)
+        if self._last_counts is not None:
+            self._on_new_spectrum(self._last_counts)
+        self._refresh_rois()
 
     # ── Status label ─────────────────────────────────────────────────────────
 
