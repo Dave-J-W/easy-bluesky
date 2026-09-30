@@ -226,37 +226,53 @@ class _EPICSMonitor(QObject):
         )
 
     def setup(self, pv_map: dict):
-        """Open CA monitors for every PV in pv_map = {dev: {sig: pvname}}."""
+        """Open CA monitors for every PV in pv_map = {dev: {sig: pvname}}.
+
+        Processes device-level entries (dev_name != sig_name) before
+        signal-level entries (dev_name == sig_name).  When the RE namespace
+        exports a signal object alongside its parent device — e.g. both
+        'mca1' and 'mca1_roi0_count' map to the same PV — the device-level
+        entry wins.  Any subsequent entry for an already-mapped PV is skipped.
+        """
         self.clear()
         self._alive = True   # clear() arms it False; re-arm for new subscriptions
         try:
             import epics
         except ImportError:
             return
-        for dev_name, sigs in pv_map.items():
-            for sig_name, pvname in sigs.items():
-                if not pvname:
-                    continue
-                self._map[pvname] = (dev_name, sig_name)
-                pv = epics.PV(
-                    pvname,
+
+        # Flatten to (dev, sig, pvname) triples, device-level entries first.
+        entries = [
+            (dev, sig, pv)
+            for dev, sigs in pv_map.items()
+            for sig, pv in sigs.items()
+            if pv
+        ]
+        entries.sort(key=lambda e: e[0] == e[1])   # dev==sig sorts last (True > False)
+
+        for dev_name, sig_name, pvname in entries:
+            if pvname in self._map:
+                continue   # already claimed by a device-level entry
+            self._map[pvname] = (dev_name, sig_name)
+            pv = epics.PV(
+                pvname,
+                auto_monitor=True,
+                form='time',             # DBR_TIME: universally supported
+                callback=self._on_change,
+                connection_callback=self._on_connect,
+            )
+            self._pvs[pvname] = pv
+            # Strip field suffix (e.g. "IOC:M1.RBV" → "IOC:M1") then add .DESC.
+            # Appending .DESC directly would give "IOC:M1.RBV.DESC" (invalid).
+            record_base = pvname.rsplit('.', 1)[0] if '.' in pvname else pvname
+            desc_pvname = record_base + ".DESC"
+            self._desc_map.setdefault(desc_pvname, []).append((dev_name, sig_name))
+            if desc_pvname not in self._desc_pvs:
+                self._desc_pvs[desc_pvname] = epics.PV(
+                    desc_pvname,
                     auto_monitor=True,
-                    form='time',             # DBR_TIME: universally supported
-                    callback=self._on_change,
-                    connection_callback=self._on_connect,
+                    callback=self._on_desc_change,
                 )
-                self._pvs[pvname] = pv
-                # Strip field suffix (e.g. "IOC:M1.RBV" → "IOC:M1") then add .DESC.
-                # Appending .DESC directly would give "IOC:M1.RBV.DESC" (invalid).
-                record_base = pvname.rsplit('.', 1)[0] if '.' in pvname else pvname
-                desc_pvname = record_base + ".DESC"
-                self._desc_map.setdefault(desc_pvname, []).append((dev_name, sig_name))
-                if desc_pvname not in self._desc_pvs:
-                    self._desc_pvs[desc_pvname] = epics.PV(
-                        desc_pvname,
-                        auto_monitor=True,
-                        callback=self._on_desc_change,
-                    )
 
     def clear(self):
         self._alive = False   # block in-flight CA callbacks from emitting
@@ -726,14 +742,6 @@ class DevicesPlansTab(QWidget):
         sim_dev_set = (set(pv_map) - set(epics_pv_map)
                        - {d for d in pv_map if d.startswith('__')})
 
-        # Deduplicate: remove entries whose device name has no tree row.
-        # get_device_pvnames() can return both 'mca1' and 'mca1_roi0_count'
-        # (the signal object exported to the namespace alongside the device).
-        # They map to the same PV; the second overwrites the first in _map,
-        # routing updates to a phantom key.  Keep only entries for devices
-        # that appear in the tree (_device_items).
-        epics_pv_map = {dev: sigs for dev, sigs in epics_pv_map.items()
-                        if dev in self._device_items}
 
         # ── Signal sub-rows + tweak widgets for EPICS devices ────────────
         for dev_name, sigs in epics_pv_map.items():
