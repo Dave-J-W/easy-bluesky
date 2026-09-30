@@ -1379,38 +1379,69 @@ class DevicesPlansTab(QWidget):
     # ── Device context menu (AD Viewer + XRF Viewer) ────────────────────────────
 
     def _on_device_context_menu(self, pos):
+        from PyQt6.QtGui import QClipboard
+        from PyQt6.QtWidgets import QApplication
+
         item = self.devices_tree.itemAt(pos)
         if item is None:
             return
+
+        menu = QMenu(self)
+        acts: dict = {}
+
+        # ── Signal sub-row: offer copy PV name ──────────────────────────────
+        parent = item.parent()
+        if parent is not None and parent in self._device_items.values():
+            pvname = item.toolTip(0)
+            sig_label = item.text(0).strip()
+            if pvname:
+                acts['copy_pv'] = menu.addAction(f"Copy PV name:  {pvname}")
+            action = menu.exec(self.devices_tree.viewport().mapToGlobal(pos))
+            if action is not None and action is acts.get('copy_pv'):
+                QApplication.clipboard().setText(pvname)
+            return
+
+        # ── Device row ───────────────────────────────────────────────────────
         dev_name = item.text(0).strip()
         if dev_name not in self._device_items:
-            return  # group header or signal sub-row — skip
+            return  # group header — nothing to show
 
         pv_map_dev = self._pv_map_cache.get(dev_name, {})
         classname  = self._device_classes.get(dev_name, "")
+
+        # Copy all PV names for this device
+        pvnames = {sig: pv for sig, pv in pv_map_dev.items() if pv}
+        if pvnames:
+            if len(pvnames) == 1:
+                only_pv = next(iter(pvnames.values()))
+                acts['copy_pv'] = menu.addAction(f"Copy PV name:  {only_pv}")
+            else:
+                acts['copy_pv'] = menu.addAction("Copy all PV names")
+            menu.addSeparator()
 
         from .ad_viewer  import is_area_detector
         from .xrf_viewer import is_xrf_detector
         is_ad  = is_area_detector(pv_map_dev, classname)
         is_xrf = is_xrf_detector(pv_map_dev, classname)
-        if not is_ad and not is_xrf:
-            return
-
-        menu = QMenu(self)
-        acts: dict = {}
         if is_ad:
-            acts['ad_open'] = menu.addAction("📺  Open AD Viewer")
-            acts['ad_cfg']  = menu.addAction("⚙  Configure AD Viewer…")
+            acts['ad_open'] = menu.addAction("Open AD Viewer")
+            acts['ad_cfg']  = menu.addAction("Configure AD Viewer…")
         if is_xrf:
             if is_ad:
                 menu.addSeparator()
-            acts['xrf_open'] = menu.addAction("📊  Open XRF Viewer")
-            acts['xrf_cfg']  = menu.addAction("⚙  Configure XRF Viewer (change spectrum PV)…")
+            acts['xrf_open'] = menu.addAction("Open XRF Viewer")
+            acts['xrf_cfg']  = menu.addAction("Configure XRF Viewer…")
+
+        if not acts:
+            return
 
         action = menu.exec(self.devices_tree.viewport().mapToGlobal(pos))
         if action is None:
-            return  # menu dismissed without selecting anything
-        if action is acts.get('ad_open'):
+            return
+        if action is acts.get('copy_pv'):
+            text = "\n".join(pvnames.values()) if len(pvnames) > 1 else next(iter(pvnames.values()))
+            QApplication.clipboard().setText(text)
+        elif action is acts.get('ad_open'):
             self._open_ad_viewer(dev_name, pv_map_dev, force_dialog=False)
         elif action is acts.get('ad_cfg'):
             self._open_ad_viewer(dev_name, pv_map_dev, force_dialog=True)
