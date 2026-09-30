@@ -31,7 +31,7 @@ except ImportError:
 
 _MCA_SETTINGS_PATH = Path.home() / ".easy_bluesky" / "mca_viewer_settings.json"
 
-_N_ROIS = 16
+_N_ROIS = 5
 
 # Semi-transparent RGBA colors for ROI bands
 _ROI_COLORS = [
