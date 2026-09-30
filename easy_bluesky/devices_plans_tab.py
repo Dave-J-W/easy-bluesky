@@ -437,6 +437,7 @@ class DevicesPlansTab(QWidget):
         self._ad_viewers:    dict = {}   # dev_name → ADViewerWindow
         self._sample_viewers: dict = {}  # dev_name → SampleStation window
         self._xrf_viewers:   dict = {}   # dev_name → XRFViewerWindow
+        self._mca_viewers:   dict = {}   # dev_name → MCAViewerWindow
         self._conn_settings: dict = {}   # active connection profile
         self._tweak_step_values: dict = {}  # dev_name → step spinbox value (survives sort)
         self._sort_col:   int = -1          # -1 = unsorted
@@ -1507,8 +1508,9 @@ class DevicesPlansTab(QWidget):
         if is_xrf:
             if is_ad:
                 menu.addSeparator()
-            acts['xrf_open'] = menu.addAction("Open XRF Viewer")
+            acts['xrf_open'] = menu.addAction("Open XRF Viewer (PyMCA)")
             acts['xrf_cfg']  = menu.addAction("Configure XRF Viewer…")
+            acts['mca_open'] = menu.addAction("Open MCA Viewer (IOC ROIs)")
 
         if not acts:
             return
@@ -1527,6 +1529,8 @@ class DevicesPlansTab(QWidget):
             self._open_xrf_viewer(dev_name, pv_map_dev, force_dialog=False)
         elif action is acts.get('xrf_cfg'):
             self._open_xrf_viewer(dev_name, pv_map_dev, force_dialog=True)
+        elif action is acts.get('mca_open'):
+            self._open_mca_viewer(dev_name, pv_map_dev)
 
     def _open_ad_viewer(self, dev_name: str, pv_map_dev: dict,
                         force_dialog: bool = False):
@@ -1675,9 +1679,29 @@ class DevicesPlansTab(QWidget):
         viewer.destroyed.connect(lambda _, n=dev_name: self._xrf_viewers.pop(n, None))
         viewer.show()
 
+    def _open_mca_viewer(self, dev_name: str, pv_map_dev: dict):
+        from .mca_viewer import MCAViewerWindow, extract_mca_prefix
+
+        existing = self._mca_viewers.get(dev_name)
+        if existing is not None:
+            try:
+                existing.raise_()
+                existing.activateWindow()
+                return
+            except RuntimeError:
+                pass
+
+        prefix = extract_mca_prefix(pv_map_dev) or ""
+        viewer = MCAViewerWindow(dev_name, prefix, pv_map_dev, parent=None)
+        self._mca_viewers[dev_name] = viewer
+        viewer.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        viewer.destroyed.connect(lambda _, n=dev_name: self._mca_viewers.pop(n, None))
+        viewer.show()
+
     def close_all_viewers(self):
         """Close all open AD Viewer, XRF Viewer and Sample View windows."""
-        for viewers in (self._ad_viewers, self._xrf_viewers, self._sample_viewers):
+        for viewers in (self._ad_viewers, self._xrf_viewers,
+                        self._mca_viewers, self._sample_viewers):
             for win in list(viewers.values()):
                 try:
                     win.close()
