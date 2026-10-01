@@ -41,15 +41,32 @@ if (-not (Test-Path $ui)) {
     Write-Error "No such panel: $ui`nAvailable: $available"
 }
 
-# The activation that matters: Library\bin must precede everything.
-$env:PATH = "$eb;$eb\Library\bin;$qt\bin;$env:PATH"
+# Full conda-activation PATH. Three directories is not enough: plugin dependencies also
+# resolve out of Library\mingw-w64\bin and Library\usr\bin, and omitting them produces
+# "DLL not found" popups at startup while the app still opens a window.
+$env:PATH = @(
+    $eb
+    "$eb\Library\mingw-w64\bin"
+    "$eb\Library\usr\bin"
+    "$eb\Library\bin"
+    "$eb\Scripts"
+    "$eb\bin"
+    "$qt\bin"
+    $env:PATH
+) -join ';'
 $env:QT_PLUGIN_PATH = "$qt\plugins"
 
 Write-Host "Opening $(Split-Path -Leaf $ui) in Qt Widgets Designer..."
+
+# The .ui path contains spaces ("Claude Locals"). -ArgumentList splits on whitespace, so
+# an unquoted path is passed as several arguments and Designer reports a file that does
+# not exist ("...\Documents\Claude"). Quote it explicitly.
+$arg = '"{0}"' -f $ui
+
 if ($Wait) {
-    Start-Process -FilePath $designer -ArgumentList $ui -Wait
+    Start-Process -FilePath $designer -ArgumentList $arg -Wait
 } else {
-    $proc = Start-Process -FilePath $designer -ArgumentList $ui -PassThru
+    $proc = Start-Process -FilePath $designer -ArgumentList $arg -PassThru
     Start-Sleep -Seconds 6
     $proc.Refresh()
     if ($proc.HasExited) {
