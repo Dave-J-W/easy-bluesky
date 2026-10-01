@@ -45,9 +45,11 @@ Everything in this directory runs. Same panel, built twice:
 | `trough_panel.ui` | layout, written and edited by Qt Designer |
 | `trough_panel.py` | the `.ui` version — behaviour only |
 | `trough_panel_handcoded.py` | the identical panel, built in Python the current way |
+| `trough_panel_extended.ui` | `trough_panel.ui` **after three Designer edits** |
+| `trough_panel_handcoded_extended.py` | the same three edits, done in Python |
 | `ui_loader.py` | the entire loading mechanism, ~20 lines |
-| `test_ui_demo.py` | 16 tests, including widget-tree equivalence and tree-invariance |
-| `measure.py` | reproduces the numbers below and the screenshots |
+| `test_ui_demo.py` | 20 tests — equivalence, tree-invariance, and the editability claim |
+| `measure.py` | reproduces every number below and the screenshots |
 
 The panel has live readouts, start/stop, and a **control-mode dropdown** that switches the
 setpoint between pressure control and area control — including its units.
@@ -63,23 +65,101 @@ excluded, so the explanatory prose in either file does not inflate the count:
 
 | implementation | Python a human maintains | other |
 |---|---:|---:|
-| `trough_panel.py` + `trough_panel.ui` | **29** | 275 (XML, Designer-managed) |
+| `trough_panel.py` + `trough_panel.ui` | **46** | 275 (XML, Designer-managed) |
 | `trough_panel_handcoded.py` | **144** | 0 |
 
-**79 % less Python** — and note the gap *widened* when we added the mode dropdown, from 72
-lines to 115. The advantage scales with panel complexity, because complexity in a panel is
-mostly structure.
+**68 % less Python.** The `.ui` side is 46 rather than 29 lines because it also carries the
+field-discovery and row-integrity helpers that make the next section work — we would rather
+show that cost than hide it.
 
 The two are not merely similar:
 
 - `test_ui_and_handcoded_build_the_same_widget_tree` compares
   `(objectName, className, parentObjectName)` for every descendant widget. They match.
-- The rendered PNGs are **byte-identical** (`md5 51f72e3e7e0c509feaad2bec413af32b`).
+- The rendered PNGs are **byte-identical**.
 
 So the smaller version is not doing less. It is the same panel.
 
     $ /path/to/env/python -m pytest docs/ours/ui-demo -q
-    16 passed in 0.15s
+    20 passed in 0.17s
+
+---
+
+## The edit challenge: changing a panel without a programmer
+
+This is the part worth judging. Line counts for *building* a panel are interesting;
+whether a beamline scientist can *change* one is the actual argument.
+
+**The task.** Three presentational changes, of the kind that get requested during a
+beamtime:
+
+1. add a fifth readout row, **Subphase pH**
+2. relabel **Area** to **Trough area**
+3. move the **Control** group above **Readouts**
+
+**Route A — edit `trough_panel.ui` in Designer.** Open it, drag, type, save. The result is
+`trough_panel_extended.ui`, shipped here so you can diff it.
+
+**Route B — edit `trough_panel_handcoded.py`.** The result is
+`trough_panel_handcoded_extended.py`, also shipped.
+
+| route | Python lines changed |
+|---|---:|
+| edit the `.ui` in Designer | **0** |
+| edit the hand-coded panel | **9** |
+
+![after the three edits](trough_panel_extended.png)
+
+The zero is **measured, not assumed.** `trough_panel.py` is byte-identical for both
+layouts, and the test suite proves the unmodified class handles the edited file:
+
+```python
+def test_extended_ui_works_with_unmodified_python(qtbot):
+    panel = TroughPanel(ui_name="trough_panel_extended")
+    assert panel.fields() == (..., "ph")      # the new row appeared
+    assert panel.unit_of("ph") == "pH"
+    assert panel.lbl_area.text() == "Trough area"
+    panel.update_readings({"ph": 7.42})
+    assert panel.val_ph.text() == "7.42"
+```
+
+That works because **the readout set is discovered from the `.ui`**, not listed in Python.
+A row is a `val_<field>` label with `lbl_<field>` and `unit_<field>` beside it, and
+`test_the_field_set_is_not_named_in_python` asserts the readout-only field names never
+appear in the source at all.
+
+### Being straight about the 9
+
+Nine lines is not a lot, and we are not going to pretend otherwise. Our hand-coded panel is
+*well* factored — it loops over a `FIELDS` tuple — so adding a row there is genuinely
+cheap. A worse-factored panel would be much more; we did not write one to inflate the gap.
+
+**The argument is not the line count. It is what the two routes require:**
+
+| | `.ui` route | Python route |
+|---|---|---|
+| Python knowledge needed | none | yes |
+| Visual feedback while editing | yes, WYSIWYG | none — run it to see |
+| Can the editor break the panel's logic? | **no** — Designer cannot reach it | yes, same file |
+| What review sees | a layout diff | a diff in a 144-line file with logic in it |
+| Who can do it | anyone on the beamline | a programmer |
+
+The third row is the one we care about most. From Designer you *cannot* touch
+`update_readings` or a signal connection, because the tool does not expose them. That is
+why it is safe to hand to a scientist mid-beamtime, and it is the same reason Phoebus
+screens get edited by the people who need them changed.
+
+### And a mistake gets caught
+
+The realistic failure is a half-finished row — a value box added without its caption or
+unit. The panel reports it and a test refuses it:
+
+```python
+def test_shipped_ui_files_have_complete_rows(qtbot, ui_name):
+    assert TroughPanel(ui_name=ui_name).incomplete_rows() == ()
+```
+
+So the answer to "what if they get it wrong" is: the suite tells them which row, by name.
 
 Run with conda-forge `pyqt6` 6.11.0 / Qt 6.11.2, headless (`QT_QPA_PLATFORM=offscreen`).
 No hardware, no EPICS, no queue server.
@@ -225,6 +305,27 @@ We would rather state these than have you find them.
   test is that something; without it this is just a suggestion.
 
 ---
+
+## How this composes with the UI/service separation plan
+
+A colleague of ours looked at the project from a different angle and wrote
+`docs/refactoring-plan.md` — Qt-free `core/`, `services/` and `app/` layers under an
+enforced `ui → app → services → core` rule, a serializable command/event API, and
+`ui/qt_bridge.py` as the only module that knows both Qt and the services. **The two
+proposals are orthogonal and reinforce each other**, which is worth saying explicitly
+because they arrived separately:
+
+- That plan decides **where logic lives**. This one decides **where layout lives**.
+- Its Phase 3 moves each view under `ui/` and has it receive a facade instead of `worker`.
+  A view that neither owns I/O nor builds its own layout is *just a binding* — which is
+  exactly the shape the `.ui` convention assumes.
+- Its `PVBatch` event is already the input this panel takes. `TroughPanel.update_readings`
+  accepts a plain mapping and does no I/O, so a bridge subscribing to `PVBatch` can drive
+  it unchanged. That is not a coincidence we engineered after the fact — it is what
+  "layout in the `.ui`, behaviour thin" produces on its own.
+
+If you adopt one and not the other, both still stand alone. Adopted together, a new tab is
+a `.ui` file plus a short binding class.
 
 ## The separable part: `main.py`
 

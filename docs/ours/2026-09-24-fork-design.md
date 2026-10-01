@@ -294,7 +294,9 @@ panels without accumulating divergence.
   `ImportError: DLL load failed while importing QtCore`. Qt comes from conda-forge.
 - **Never commit to `master`.** It mirrors upstream. Work on a topic branch.
 - **Never merge upstream.** Rebase, so our work stays a clean patch series.
-- **Never create or write a PV.** Simulation only until a prefix is approved.
+- **Reading PVs is always fine. WRITING a PV requires explicit human approval**, every
+  time — it is not granted by a previous approval. Creating new PVs still needs an approved
+  prefix. (Policy set by the user 2026-10-01, replacing a blanket simulation-only rule.)
 
 ## Hot files — avoid touching
 `main.py` (38), `widgets.py` (8), `plot_tools.py` (7) — commits in the last 30 days.

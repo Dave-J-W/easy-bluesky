@@ -1,23 +1,26 @@
-"""Trough panel — layout in trough_panel.ui, behaviour here.
+"""Trough panel — layout in a .ui, behaviour here.
 
-Compare with trough_panel_handcoded.py, which builds the identical widget tree in Python.
-test_ui_demo.py asserts the two are equivalent, so the difference between them is purely
-where the layout lives, not what the panel is.
+Two things to notice.
 
-Note the mode dropdown. Switching between pressure control and area control changes what
-the operator sees, but it does *not* change the widget tree: both setpoint pages exist
-from construction and `QStackedWidget` just shows one of them. That is the difference
-between a panel whose *state* varies and a panel whose *structure* varies, and only the
-second kind is outside what a .ui can express. See README.md, "What 'static' means".
+**The readout rows are discovered from the .ui, not listed here.** Any row a human adds in
+Designer appears and updates with no Python change at all. That is the editability claim,
+and `test_extended_ui_works_with_unmodified_python` proves it by loading a second, edited
+.ui into this same unmodified class.
+
+**The panel does no I/O.** It consumes a plain mapping of readings, which is the shape of
+the `PVBatch` event in `docs/refactoring-plan.md`. The two proposals compose: once views
+receive a facade instead of a worker, a view is layout plus a thin binding, and the layout
+is the part that belongs in a .ui.
+
+Switching control mode changes what the operator sees but not the widget tree — see
+README.md, "What 'static' means".
 """
 
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtWidgets import QLabel, QWidget
 
 from ui_loader import load_ui
-
-FIELDS = ("pressure", "area", "temperature", "barrier")
 
 #: (combo label, setpoint spinbox, unit, decimals) — index matches the stack page.
 MODES = (
@@ -25,13 +28,23 @@ MODES = (
     ("Area control", "spin_area", "cm^2", 1),
 )
 
+NO_READING = "--"
+
 
 class TroughPanel(QWidget):
     """Live readouts, plus a setpoint whose meaning follows the control mode."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, ui_name: str = "trough_panel") -> None:
         super().__init__(parent)
-        load_ui("trough_panel", self)
+        load_ui(ui_name, self)
+
+        # Readouts come from the .ui. A row is a val_<field> label; its caption and unit
+        # are lbl_<field> and unit_<field>. Nothing about the field set lives in Python.
+        self._values: dict[str, QLabel] = {}
+        for widget in self.findChildren(QLabel):
+            name = widget.objectName()
+            if name.startswith("val_"):
+                self._values[name[len("val_"):]] = widget
 
         # The entire mode switch. Both pages already exist; this only selects one.
         self.combo_mode.currentIndexChanged.connect(self.setpoint_stack.setCurrentIndex)
@@ -40,15 +53,42 @@ class TroughPanel(QWidget):
         self.btn_start.clicked.connect(lambda: self.set_status("Running"))
         self.btn_stop.clicked.connect(lambda: self.set_status("Stopped"))
 
+    # ── what the .ui declared ────────────────────────────────────────────────
+
+    def fields(self) -> tuple[str, ...]:
+        """Readout fields this panel displays, in .ui order."""
+        return tuple(self._values)
+
+    def unit_of(self, field: str) -> str | None:
+        """The unit the .ui declares for a field, or None if the row is incomplete."""
+        label = self.findChild(QLabel, f"unit_{field}")
+        return label.text() if label is not None else None
+
+    def incomplete_rows(self) -> tuple[str, ...]:
+        """Fields whose row is missing its caption or unit label.
+
+        A half-finished row is the realistic way a non-programmer's Designer edit goes
+        wrong, so the panel can name it and a test can refuse it.
+        """
+        bad = []
+        for field in self._values:
+            caption = self.findChild(QLabel, f"lbl_{field}")
+            unit = self.findChild(QLabel, f"unit_{field}")
+            if caption is None or unit is None:
+                bad.append(field)
+        return tuple(bad)
+
     # ── behaviour ────────────────────────────────────────────────────────────
 
     def update_readings(self, readings: dict[str, float]) -> None:
-        """Apply a reading dict, e.g. {"pressure": 22.41}. Unknown keys are ignored;
-        a field with no reading shows '--' rather than a stale number."""
-        for field in FIELDS:
-            label = getattr(self, f"val_{field}")
+        """Apply a reading mapping, e.g. {"pressure": 22.41}.
+
+        Keys with no row in the .ui are ignored; a row with no reading shows '--' rather
+        than a stale number.
+        """
+        for field, label in self._values.items():
             value = readings.get(field)
-            label.setText("--" if value is None else f"{value:.2f}")
+            label.setText(NO_READING if value is None else f"{value:.2f}")
 
     def set_mode(self, index: int) -> None:
         """Select pressure (0) or area (1) control."""
