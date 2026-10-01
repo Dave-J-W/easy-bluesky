@@ -72,8 +72,12 @@ def _save_settings(settings: dict):
 
 
 def extract_mca_prefix(pv_map: dict) -> str | None:
-    """Return the MCA record base prefix by matching any ROI count PV."""
-    pat = re.compile(r'^(.+)\.R\d+$')
+    """Return the MCA record base prefix by matching any ROI count PV.
+
+    Handles both real mca records (separator '.') and pydev records
+    (separator '_', used when the EPICS DB parser rejects dots in names).
+    """
+    pat = re.compile(r'^(.+)[._]R\d+$')
     for pv in pv_map.values():
         if not pv:
             continue
@@ -83,13 +87,21 @@ def extract_mca_prefix(pv_map: dict) -> str | None:
     return None
 
 
+def _detect_sep(pv_map: dict) -> str:
+    """Return the field separator used by this device's MCA PVs: '.' or '_'."""
+    for pv in pv_map.values():
+        if pv and re.search(r'_R\d+$', pv):
+            return '_'
+    return '.'
+
+
 def detect_n_rois(pv_map: dict) -> int:
-    """Count ROI slots from the ophyd pv_map (PVs ending in .R{N}).
+    """Count ROI slots from the ophyd pv_map (PVs ending in .R{N} or _R{N}).
 
     Returns max(N)+1 so the viewer only subscribes to the ROIs the device
     actually exposes.  Falls back to _N_ROIS if no ROI PVs are found.
     """
-    roi_pat = re.compile(r'\.R(\d+)$')
+    roi_pat = re.compile(r'[._]R(\d+)$')
     indices = set()
     for pv in pv_map.values():
         if not pv:
@@ -117,6 +129,9 @@ class MCAViewerWindow(QMainWindow):
         self._alive       = True
         self._live        = True
         self._n_rois      = detect_n_rois(self._pv_map)
+        # '.' for real mca records; '_' for pydev records (dots not allowed in
+        # EPICS DB parser record/alias names on some base versions)
+        self._sep         = _detect_sep(self._pv_map)
 
         # CA PV handles — strong references to prevent GC
         self._pvs: list = []
@@ -392,19 +407,23 @@ class MCAViewerWindow(QMainWindow):
             self._pvs.append(pv)
             return pv
 
-        _mk(f"{prefix}.VAL",  self._on_spectrum_cb)
-        _mk(f"{prefix}.ERTM", self._on_status_cb)
-        _mk(f"{prefix}.ELTM", self._on_status_cb)
-        _mk(f"{prefix}.ACQG", self._on_status_cb)
-        _mk(f"{prefix}.CALO", self._on_cal_cb)
-        _mk(f"{prefix}.CALS", self._on_cal_cb)
+        sep = self._sep
+        # For real mca records sep='.', the VAL field IS the record itself.
+        # For pydev records sep='_', .VAL is the waveform record directly.
+        val_pv = prefix if sep == '_' else f"{prefix}.VAL"
+        _mk(val_pv,               self._on_spectrum_cb)
+        _mk(f"{prefix}{sep}ERTM", self._on_status_cb)
+        _mk(f"{prefix}{sep}ELTM", self._on_status_cb)
+        _mk(f"{prefix}{sep}ACQG", self._on_status_cb)
+        _mk(f"{prefix}{sep}CALO", self._on_cal_cb)
+        _mk(f"{prefix}{sep}CALS", self._on_cal_cb)
 
         for n in range(self._n_rois):
             for field, key in (
-                (f"{prefix}.R{n}",    'counts'),
-                (f"{prefix}.R{n}LO",  'lo'),
-                (f"{prefix}.R{n}HI",  'hi'),
-                (f"{prefix}.R{n}NM",  'nm'),
+                (f"{prefix}{sep}R{n}",    'counts'),
+                (f"{prefix}{sep}R{n}LO",  'lo'),
+                (f"{prefix}{sep}R{n}HI",  'hi'),
+                (f"{prefix}{sep}R{n}NM",  'nm'),
             ):
                 self._roi_pv_idx[field] = (n, key)
                 _mk(field, self._on_roi_cb)
@@ -756,7 +775,8 @@ class MCAViewerWindow(QMainWindow):
 
     def _on_read_now(self):
         for pv in self._pvs:
-            if pv.pvname == f"{self._prefix}.VAL":
+            val_pv = self._prefix if self._sep == '_' else f"{self._prefix}.VAL"
+            if pv.pvname == val_pv:
                 try:
                     val = pv.get(timeout=2.0)
                     if val is not None:
@@ -785,9 +805,11 @@ class MCAViewerWindow(QMainWindow):
     def _on_stop(self):         self._ca_put('.STOP', 1)
 
     def _ca_put(self, field: str, value):
+        """field may start with '.' (e.g. '.R0LO'); sep is applied automatically."""
         try:
             import epics
-            epics.caput(f"{self._prefix}{field}", value, wait=False)
+            bare = field.lstrip('.')
+            epics.caput(f"{self._prefix}{self._sep}{bare}", value, wait=False)
         except Exception:
             pass
 
